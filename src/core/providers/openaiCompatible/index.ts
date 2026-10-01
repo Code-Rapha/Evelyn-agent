@@ -25,6 +25,30 @@ import type {
 	ProviderDescriptor,
 	ProviderStatus,
 } from '../types';
+import { AbortedChatStream, SseChatStream, isAbortError, buildChatRequestBody } from '../chat/sseStream';
+import type {
+	ChatProvider,
+	ChatRequest,
+	ChatStream,
+	ChatStreamEvent,
+} from '../chat/types';
+
+/**
+ * The subset of a `ReadableStream` this provider relies on when streaming.
+ * Kept structural so tests can drive it with a plain async generator.
+ */
+export interface ByteStreamLike {
+	readonly [Symbol.asyncIterator]?: () => AsyncIterator<Uint8Array | string>;
+}
+
+/** The response shape this provider needs. */
+export interface FetchResponseLike {
+	readonly ok: boolean;
+	readonly status: number;
+	/** Present on streamed responses; absent on a plain one. */
+	readonly body?: ByteStreamLike | null;
+	text(): Promise<string>;
+}
 
 /** The subset of `fetch` this provider relies on. */
 export type FetchLike = (
@@ -32,12 +56,11 @@ export type FetchLike = (
 	init?: {
 		method?: string;
 		headers?: Record<string, string>;
+		body?: string;
+		signal?: AbortSignal;
+		stream?: boolean;
 	},
-) => Promise<{
-	readonly ok: boolean;
-	readonly status: number;
-	text(): Promise<string>;
-}>;
+) => Promise<FetchResponseLike>;
 
 export interface OpenAICompatibleProviderOptions {
 	/** Stable provider id, e.g. `local-llm`. Also namespaces the secret ref. */
@@ -73,7 +96,7 @@ function normalizeBaseUrl(baseUrl: string): string {
 	return trimmed.replace(/\/+$/, '');
 }
 
-export class OpenAICompatibleProvider implements Provider {
+export class OpenAICompatibleProvider implements Provider, ChatProvider {
 	private readonly baseUrl: string;
 	private readonly fetchImpl: FetchLike;
 	private readonly secrets: SecretStore | undefined;
@@ -218,6 +241,71 @@ export class OpenAICompatibleProvider implements Provider {
 			this.status = 'configured';
 		}
 		return headers;
+	}
+
+	/**
+	 * Starts a streamed chat completion.
+	 *
+	 * The returned stream is lazy about the socket but eager about the
+	 * handshake: HTTP failures, auth failures and a malformed response body are
+	 * rejected here, before the caller receives a stream. Once iterating, a
+	 * mid-stream failure surfaces as a final `Error` event rather than a throw,
+	 * because the consumer has already rendered partial output by then.
+	 *
+	 * Aborting via `options.signal` ends the stream with `closedReason`
+	 * `'aborted'` and is not an error.
+	 */
+	async streamChat(
+		request: ChatRequest,
+		options: { readonly signal?: AbortSignal } = {},
+	): Promise<ChatStream> {
+		const endpoint = `${this.baseUrl}/chat/completions`;
+		const headers = {
+			...(await this.buildHeaders()),
+			'content-type': 'application/json',
+			accept: 'text/event-stream',
+		};
+
+		let response: Awaited<ReturnType<FetchLike>>;
+		try {
+			response = await this.fetchImpl(endpoint, {
+				method: 'POST',
+				headers,
+				body: JSON.stringify(buildChatRequestBody(request)),
+				stream: true,
+				...(options.signal !== undefined ? { signal: options.signal } : {}),
+			});
+		} catch (cause) {
+			if (isAbortError(cause)) {
+				return new AbortedChatStream();
+			}
+			throw new ProviderError(
+				`Could not reach the chat endpoint at ${endpoint}`,
+				{ cause, details: { providerId: this.base.id, endpoint } },
+			);
+		}
+
+		if (response.status === 401 || response.status === 403) {
+			throw new ProviderError(
+				`Authentication failed at ${endpoint} (HTTP ${response.status}). Check the API key for this provider.`,
+				{ details: { providerId: this.base.id, status: response.status } },
+			);
+		}
+		if (!response.ok) {
+			throw new ProviderError(
+				`The chat endpoint ${endpoint} returned HTTP ${response.status}`,
+				{ details: { providerId: this.base.id, status: response.status } },
+			);
+		}
+		if (response.body === undefined || response.body === null) {
+			throw new ProviderError(
+				`The chat endpoint ${endpoint} returned no stream body`,
+				{ details: { providerId: this.base.id } },
+			);
+		}
+
+		this.status = 'available';
+		return new SseChatStream(response.body, options.signal);
 	}
 
 	/** Parses `{ data: [{ id }] }`, rejecting anything else. */
