@@ -9,15 +9,132 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onView:modelhub.main",
+    "onCommand:modelhub.open"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "modelhub",
+          "title": "ModelHub",
+          "icon": "media/modelhub.svg"
+        }
+      ]
+    },
+    "views": {
+      "modelhub": [
+        {
+          "id": "modelhub.main",
+          "name": "ModelHub"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "modelhub.main",
+        "contents": "ModelHub is active.\nNo providers are registered yet.\n[Refresh](command:modelhub.refresh)"
+      }
+    ],
     "commands": [
       {
-        "command": "modelhub-vscode.helloWorld",
-        "title": "Hello World"
+        "command": "modelhub.open",
+        "title": "Open ModelHub",
+        "category": "ModelHub"
+      },
+      {
+        "command": "modelhub.refresh",
+        "title": "Refresh",
+        "category": "ModelHub",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "modelhub.addProvider",
+        "title": "Add Provider",
+        "category": "ModelHub",
+        "icon": "$(add)"
+      },
+      {
+        "command": "modelhub.removeProvider",
+        "title": "Remove Provider",
+        "category": "ModelHub"
+      },
+      {
+        "command": "modelhub.showAbout",
+        "title": "About ModelHub",
+        "category": "ModelHub"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "modelhub.refresh",
+          "when": "view == modelhub.main",
+          "group": "navigation@1"
+        },
+        {
+          "command": "modelhub.addProvider",
+          "when": "view == modelhub.main",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "modelhub.removeProvider",
+          "when": "view == modelhub.main && viewItem =~ /^modelhub\\.provider\\./",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "ModelHub",
+      "properties": {
+        "modelhub.general.logLevel": {
+          "type": "string",
+          "enum": ["debug", "info", "warn", "error"],
+          "default": "info",
+          "description": "Minimum log level for the ModelHub output channel."
+        },
+        "modelhub.providers.enableAutoDiscovery": {
+          "type": "boolean",
+          "default": false,
+          "description": "Reserved for a future phase: automatic model discovery for providers."
+        },
+        "modelhub.agent.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Reserved for a future phase: enables the ModelHub agent runtime."
+        },
+        "modelhub.permissions.defaultLevel": {
+          "type": "string",
+          "enum": ["automatic", "ask", "deny"],
+          "default": "ask",
+          "description": "Default permission level applied by the permission/policy engine (independent of the selected AI model)."
+        },
+        "modelhub.memory.autoCapture": {
+          "type": "boolean",
+          "default": false,
+          "description": "Reserved for a future phase: automatic memory capture under ~/.modelhub/memory (local-only by default)."
+        },
+        "modelhub.backend.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Reserved for a future phase: URL of the shared ModelHub backend. Empty means fully local/offline."
+        },
+        "modelhub.terminal.allowExecution": {
+          "type": "boolean",
+          "default": false,
+          "description": "Reserved for a future phase: allows agent tool execution in the integrated terminal (goes through the permission engine)."
+        },
+        "modelhub.recovery.snapshotOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Reserved for a future phase: creates recovery snapshots before agent file modifications."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
