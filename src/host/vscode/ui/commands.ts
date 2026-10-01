@@ -7,11 +7,11 @@
  * ports to the real VS Code dialogs, so no decision lives here.
  */
 import * as vscode from 'vscode';
-import type { LoggingService } from '../core/logging';
-import type { ProviderRegistry } from '../providers/registry';
-import type { ProviderConfigService } from '../providers/config';
-import type { SecretStore } from '../providers/secrets';
-import { DisposableCollection } from '../utils';
+import type { LoggingService } from '../../../core/logging';
+import type { ProviderRegistry } from '../../../core/providers/registry';
+import type { ProviderConfigService } from '../../../core/providers/config';
+import type { SecretStore } from '../../../core/providers/secrets';
+import { DisposableCollection } from '../../../core/utils';
 import { MODELHUB_VIEW_CONTAINER_ID, MODELHUB_VIEW_ID } from './types';
 import type { ModelHubTreeProvider } from './treeView';
 import { ProviderFlow, type ProviderPromptPort, type ProviderNotifierPort } from './providerFlow';

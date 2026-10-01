@@ -6,14 +6,14 @@ import {
 	type ProviderPromptPort,
 	type ApiKeyPromptResult,
 	type BaseUrlPromptResult,
-} from '../../ui/providerFlow';
-import { providerIdFromNode } from '../../ui/commands';
-import { ProviderRegistry } from '../../providers/registry';
-import { ProviderConfigService, PROVIDER_CONFIG_KEY, type StateStore } from '../../providers/config';
-import { InMemorySecretStore, providerApiKeyRef } from '../../providers/secrets';
-import { buildRootNodes } from '../../ui/viewModel';
-import { createUiContext } from '../../ui/context';
-import type { Provider } from '../../providers/types';
+} from '../../host/vscode/ui/providerFlow';
+import { providerIdFromNode } from '../../host/vscode/ui/commands';
+import { ProviderRegistry } from '../../core/providers/registry';
+import { ProviderConfigService, PROVIDER_CONFIG_KEY, type StateStore } from '../../core/providers/config';
+import { InMemorySecretStore, providerApiKeyRef } from '../../core/providers/secrets';
+import { buildRootNodes } from '../../host/vscode/ui/viewModel';
+import { createUiContext } from '../../host/vscode/ui/context';
+import type { Provider } from '../../core/providers/types';
 
 class FakeMemento implements StateStore {
 	readonly writes: unknown[] = [];

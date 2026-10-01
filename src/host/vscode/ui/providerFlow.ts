@@ -16,17 +16,17 @@
  * - Removing a provider deletes the key, the persisted config and the
  *   registry entry, so an empty registry is genuinely empty again.
  */
-import { ProviderError } from '../core/errors';
-import type { SecretStore } from '../providers/secrets';
-import { providerApiKeyRef } from '../providers/secrets';
-import type { ProviderRegistry } from '../providers/registry';
+import { ProviderError } from '../../../core/errors';
+import type { SecretStore } from '../../../core/providers/secrets';
+import { providerApiKeyRef } from '../../../core/providers/secrets';
+import type { ProviderRegistry } from '../../../core/providers/registry';
 import type {
 	ProviderConfigService,
 	PersistedProviderConfig,
-} from '../providers/config';
-import { buildProviderConfig } from '../providers/config';
-import { OpenAICompatibleProvider, type FetchLike } from '../providers/openaiCompatible';
-import type { Provider } from '../providers/types';
+} from '../../../core/providers/config';
+import { buildProviderConfig } from '../../../core/providers/config';
+import { OpenAICompatibleProvider, type FetchLike } from '../../../core/providers/openaiCompatible';
+import type { Provider } from '../../../core/providers/types';
 
 /** Result of asking the user for the base URL. */
 export type BaseUrlPromptResult =

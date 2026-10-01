@@ -4,9 +4,9 @@
  * This is the only module under `ui/` that imports from `providers/` and
  * `core/`. Everything else depends on the interfaces declared in `./types`.
  */
-import type { ProviderRegistry } from '../providers/registry';
+import type { ProviderRegistry } from '../../../core/providers/registry';
 import type { ProviderCatalog, ProviderSummary, ModelHubUiContext } from './types';
-import type { ProviderDescriptor } from '../providers/types';
+import type { ProviderDescriptor } from '../../../core/providers/types';
 
 function toSummary(descriptor: ProviderDescriptor): ProviderSummary {
 	return {

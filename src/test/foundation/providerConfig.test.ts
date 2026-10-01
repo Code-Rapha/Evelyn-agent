@@ -1,15 +1,14 @@
 import * as assert from 'assert';
 import {
 	ProviderConfigService,
-	VsCodeStateStore,
 	buildProviderConfig,
 	PROVIDER_CONFIG_KEY,
 	type PersistedProviderConfig,
 	type StateStore,
-} from '../../providers/config';
-import { InMemorySecretStore, providerApiKeyRef } from '../../providers/secrets';
+} from '../../core/providers/config';
+import { InMemorySecretStore, providerApiKeyRef } from '../../core/providers/secrets';
 import { ValidationError } from '../../core/errors';
-import type { Provider } from '../../providers/types';
+import type { Provider } from '../../core/providers/types';
 
 /**
  * Fake `vscode.Memento`: an in-memory map with the same two operations the
@@ -39,17 +38,6 @@ class FakeMemento implements StateStore {
 	raw(key: string): unknown {
 		return this.values.get(key);
 	}
-}
-
-/**
- * Structural stand-in for `vscode.Memento`. Declared here so the adapter can be
- * exercised without importing `vscode` into the test file.
- */
-interface MementoLike {
-	get<T>(key: string): T | undefined;
-	get<T>(key: string, defaultValue: T): T;
-	update(key: string, value: unknown): Thenable<void>;
-	keys(): readonly string[];
 }
 
 /** A Memento that only ever answers the default, like an untouched install. */
@@ -320,22 +308,6 @@ suite('Foundation: provider configuration persistence', () => {
 			restored.map((provider) => provider.descriptor.id),
 			['good'],
 		);
-	});
-
-	test('VsCodeStateStore delegates get and update to the Memento', async () => {
-		const fake = new FakeMemento();
-		const store = new VsCodeStateStore(fake as unknown as MementoLike);
-
-		await store.update('a-key', { hello: 'world' });
-
-		assert.deepStrictEqual(fake.raw('a-key'), { hello: 'world' });
-		assert.deepStrictEqual(store.get('a-key', null), { hello: 'world' });
-	});
-
-	test('VsCodeStateStore returns the default for an absent key', () => {
-		const store = new VsCodeStateStore(new FakeMemento() as unknown as MementoLike);
-
-		assert.deepStrictEqual(store.get('missing', { fallback: true }), { fallback: true });
 	});
 
 	test('a read-only state store does not break list()', () => {

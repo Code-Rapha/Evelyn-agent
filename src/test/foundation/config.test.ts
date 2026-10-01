@@ -4,7 +4,7 @@ import {
 	CONFIGURATION_NAMESPACES,
 	type ConfigurationNamespace,
 	type ConfigurationReader,
-} from '../../core/config';
+} from '../../host/vscode/config';
 import { ConfigurationError } from '../../core/errors';
 
 class FakeReader implements ConfigurationReader {

@@ -3,7 +3,7 @@ import {
 	InMemorySecretStore,
 	providerApiKeyRef,
 	assertValidSecretRef,
-} from '../../providers/secrets';
+} from '../../core/providers/secrets';
 import { ValidationError } from '../../core/errors';
 
 suite('Foundation: secret store', () => {

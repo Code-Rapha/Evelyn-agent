@@ -6,7 +6,7 @@
  * model) into `vscode.TreeItem`s and forwards refresh events from the catalog.
  */
 import * as vscode from 'vscode';
-import type { DisposableLike } from '../utils';
+import type { DisposableLike } from '../../../core/utils';
 import { buildRootNodes } from './viewModel';
 import type { CollapsibleState, ModelHubTreeNode, ModelHubUiContext } from './types';
 

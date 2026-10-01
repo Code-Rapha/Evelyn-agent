@@ -1,14 +1,15 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import { ModelHubApplication } from '../../core/application';
-import { ProviderConfigService, PROVIDER_CONFIG_KEY, VsCodeStateStore } from '../../providers/config';
-import { InMemorySecretStore, providerApiKeyRef } from '../../providers/secrets';
-import { ProviderRegistry } from '../../providers/registry';
-import { ProviderFlow, type ProviderNotifierPort, type ProviderPromptPort } from '../../ui/providerFlow';
-import { createUiContext } from '../../ui/context';
-import { buildRootNodes } from '../../ui/viewModel';
-import type { FetchLike } from '../../providers/openaiCompatible';
-import type { Provider } from '../../providers/types';
+import { ModelHubApplication } from '../../host/vscode/application';
+import { ProviderConfigService, PROVIDER_CONFIG_KEY } from '../../core/providers/config';
+import { VsCodeStateStore } from '../../host/vscode/storage/vsCodeStateStore';
+import { InMemorySecretStore, providerApiKeyRef } from '../../core/providers/secrets';
+import { ProviderRegistry } from '../../core/providers/registry';
+import { ProviderFlow, type ProviderNotifierPort, type ProviderPromptPort } from '../../host/vscode/ui/providerFlow';
+import { createUiContext } from '../../host/vscode/ui/context';
+import { buildRootNodes } from '../../host/vscode/ui/viewModel';
+import type { FetchLike } from '../../core/providers/openaiCompatible';
+import type { Provider } from '../../core/providers/types';
 
 const REMOTE = 'https://integration.example.test/v1';
 const LOCAL = 'http://127.0.0.1:11434/v1';

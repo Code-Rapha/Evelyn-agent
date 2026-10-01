@@ -20,17 +20,19 @@
  */
 import * as vscode from 'vscode';
 import { ConfigurationService, VsCodeConfigurationReader } from '../config';
-import { LoggingService, OutputChannelLogSink, type LogLevel } from '../logging';
-import { ServiceContainer } from '../services';
-import { DisposableCollection } from '../../utils';
-import { ProviderRegistry } from '../../providers/registry';
-import { createUiContext } from '../../ui/context';
-import { ModelHubTreeProvider } from '../../ui/treeView';
-import { registerModelHubView } from '../../ui/viewRegistration';
-import { registerModelHubCommands, type ProviderLifecycle } from '../../ui/commands';
-import { VsCodeSecretStore } from '../../providers/secrets';
-import { ProviderConfigService, VsCodeStateStore } from '../../providers/config';
-import type { Provider } from '../../providers/types';
+import { LoggingService, type LogLevel } from '../../../core/logging';
+import { ServiceContainer } from '../../../core/services';
+import { DisposableCollection } from '../../../core/utils';
+import { ProviderRegistry } from '../../../core/providers/registry';
+import { createUiContext } from '../ui/context';
+import { ModelHubTreeProvider } from '../ui/treeView';
+import { registerModelHubView } from '../ui/viewRegistration';
+import { registerModelHubCommands, type ProviderLifecycle } from '../ui/commands';
+import { VsCodeSecretStore } from '../storage/vsCodeSecretStore';
+import { VsCodeStateStore } from '../storage/vsCodeStateStore';
+import { OutputChannelLogSink } from '../logging/vsCodeLogSink';
+import { ProviderConfigService } from '../../../core/providers/config';
+import type { Provider } from '../../../core/providers/types';
 
 export class ModelHubApplication implements vscode.Disposable {
 	private readonly disposables = new DisposableCollection();

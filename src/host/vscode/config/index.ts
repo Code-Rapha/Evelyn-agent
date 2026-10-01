@@ -9,7 +9,7 @@
  * Secrets (API keys, tokens) must NEVER be stored here — they belong in
  * VS Code's `SecretStorage`.
  */
-import { ConfigurationError } from '../errors';
+import { ConfigurationError } from '../../../core/errors';
 import * as vscode from 'vscode';
 
 export const CONFIG_SECTION = 'modelhub';

@@ -11,11 +11,10 @@
  * for is worse than leaving one unreachable, and `removeProvider` is the place
  * that cleans up both.
  *
- * The VS Code `Memento` is reached only through the `StateStore` port, so the
- * whole service is unit-testable with a fake and no extension host.
+ * The host's persistence is reached only through the `StateStore` port, so the
+  * whole service is unit-testable with a fake and no extension host.
  */
-import type * as vscode from 'vscode';
-import { ValidationError } from '../../core/errors';
+import { ValidationError } from '../../errors';
 import { providerApiKeyRef, type SecretStore } from '../secrets';
 import { OpenAICompatibleProvider, type FetchLike } from '../openaiCompatible';
 import type { Provider } from '../types';
@@ -44,19 +43,6 @@ export interface PersistedProviderConfig {
 	readonly apiKeyRef?: string;
 	readonly enabled: boolean;
 	readonly capabilities?: readonly string[];
-}
-
-/** `StateStore` over VS Code's `ExtensionContext.globalState`. */
-export class VsCodeStateStore implements StateStore {
-	constructor(private readonly memento: vscode.Memento) {}
-
-	get<T>(key: string, defaultValue: T): T {
-		return this.memento.get<T>(key, defaultValue);
-	}
-
-	async update(key: string, value: unknown): Promise<void> {
-		await this.memento.update(key, value);
-	}
 }
 
 /**

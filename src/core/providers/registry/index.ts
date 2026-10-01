@@ -1,5 +1,5 @@
 import { Provider, ProviderDescriptor } from '../types';
-import { ProviderError } from '../../core/errors';
+import { ProviderError } from '../../errors';
 import { Emitter } from '../../utils';
 
 /**

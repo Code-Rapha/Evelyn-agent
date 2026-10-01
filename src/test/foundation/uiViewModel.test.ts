@@ -1,6 +1,6 @@
 import * as assert from 'assert';
-import { buildRootNodes, buildProvidersSection } from '../../ui/viewModel';
-import type { ModelHubUiContext, ProviderCatalog, ProviderSummary } from '../../ui/types';
+import { buildRootNodes, buildProvidersSection } from '../../host/vscode/ui/viewModel';
+import type { ModelHubUiContext, ProviderCatalog, ProviderSummary } from '../../host/vscode/ui/types';
 
 /**
  * Decision D2: test the view MODEL (pure logic), not the vscode widget.

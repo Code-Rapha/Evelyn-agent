@@ -4,10 +4,10 @@ import {
 	type PermissionDecision,
 	type PermissionRequest,
 	type PermissionService,
-} from '../../permissions/types';
-import type { AgentTool, ToolExecutionContext, ToolResult } from '../../agent/types';
-import { LOCAL_ONLY_SYNC_POLICY } from '../../backend/types';
-import { STORAGE_ROOT_NAME, type StorageService } from '../../storage/types';
+} from '../../core/permissions/types';
+import type { AgentTool, ToolExecutionContext, ToolResult } from '../../core/agent/types';
+import { LOCAL_ONLY_SYNC_POLICY } from '../../core/backend/types';
+import { STORAGE_ROOT_NAME, type StorageService } from '../../core/storage/types';
 
 suite('Foundation: permission boundary', () => {
 	test('maps risk levels to permission levels', () => {

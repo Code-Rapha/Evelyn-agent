@@ -16,7 +16,7 @@
  * This module imports neither `vscode` nor any other project module except the
  * error taxonomy and the secret port, keeping it unit-testable in isolation.
  */
-import { ProviderError, ValidationError } from '../../core/errors';
+import { ProviderError, ValidationError } from '../../errors';
 import type { SecretStore } from '../secrets';
 import type {
 	ModelInfo,

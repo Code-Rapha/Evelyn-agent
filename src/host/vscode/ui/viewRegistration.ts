@@ -5,8 +5,8 @@
  * registration can be disposed independently.
  */
 import * as vscode from 'vscode';
-import type { DisposableLike } from '../utils';
-import { DisposableCollection } from '../utils';
+import type { DisposableLike } from '../../../core/utils';
+import { DisposableCollection } from '../../../core/utils';
 import { MODELHUB_VIEW_ID } from './types';
 import type { ModelHubTreeProvider } from './treeView';
 

@@ -7,14 +7,15 @@
  * the raw secret is allowed to exist in memory, and it hands it straight to
  * the caller that asked for it by reference.
  *
- * Two implementations ship here:
- *
- * - `InMemorySecretStore` — dependency-free, used by tests and as the base
- *   for the VS Code adapter.
- * - `VsCodeSecretStore` — the real adapter over `SecretStorage`.
- */
-import * as vscode from 'vscode';
-import { ValidationError } from '../../core/errors';
+ * One implementation ships here; every host supplies its own adapter.
+  *
+  * - `InMemorySecretStore` — dependency-free, used by tests and as the base
+  *   for host adapters.
+  *
+  * Host-specific adapters (the VS Code `SecretStorage` one lives under
+  * `host/vscode/`) implement this same port.
+  */
+import { ValidationError } from '../../errors';
 
 /**
  * Read/write access to secrets by opaque reference.
@@ -84,36 +85,6 @@ export class InMemorySecretStore implements SecretStore {
 	/** Test/debug affordance: how many references currently hold a value. */
 	get size(): number {
 		return this.values.size;
-	}
-}
-
-/**
- * `SecretStore` over VS Code's `SecretStorage`, which is backed by the OS
- * keychain rather than `settings.json`.
- */
-export class VsCodeSecretStore implements SecretStore {
-	constructor(private readonly secrets: vscode.SecretStorage) {}
-
-	async get(ref: string): Promise<string | undefined> {
-		return this.secrets.get(assertValidSecretRef(ref));
-	}
-
-	async store(ref: string, value: string): Promise<void> {
-		assertValidSecretRef(ref);
-		if (typeof value !== 'string') {
-			throw new ValidationError('Secret value must be a string', {
-				details: { received: typeof value },
-			});
-		}
-		await this.secrets.store(ref, value);
-	}
-
-	async delete(ref: string): Promise<void> {
-		await this.secrets.delete(assertValidSecretRef(ref));
-	}
-
-	async has(ref: string): Promise<boolean> {
-		return (await this.secrets.get(assertValidSecretRef(ref))) !== undefined;
 	}
 }
 

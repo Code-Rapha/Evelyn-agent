@@ -4,7 +4,7 @@ import {
 	MODELHUB_OPEN_COMMAND,
 	MODELHUB_REFRESH_COMMAND,
 	MODELHUB_ADD_PROVIDER_COMMAND,
-} from '../../ui/commands';
+} from '../../host/vscode/ui/commands';
 
 const EXTENSION_ID = 'modelhub-vscode.modelhub-vscode';
 

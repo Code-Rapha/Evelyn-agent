@@ -5,7 +5,7 @@
  * be unit-tested outside a VS Code host. The TreeDataProvider in `./treeView`
  * is the only place that translates these nodes into real VS Code objects.
  */
-import type { ModelInfo, ProviderStatus, ProviderType } from '../../providers/types';
+import type { ModelInfo, ProviderStatus, ProviderType } from '../../../../core/providers/types';
 
 /** Activity bar container id (see `contributes.viewsContainers` in package.json). */
 export const MODELHUB_VIEW_CONTAINER_ID = 'modelhub';

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ModelHubApplication } from './core/application';
+import { ModelHubApplication } from './host/vscode/application';
 
 /**
  * Extension lifecycle:

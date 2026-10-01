@@ -1,6 +1,6 @@
 import * as assert from 'assert';
-import { ProviderRegistry } from '../../providers/registry';
-import type { ModelInfo, Provider } from '../../providers/types';
+import { ProviderRegistry } from '../../core/providers/registry';
+import type { ModelInfo, Provider } from '../../core/providers/types';
 import { ProviderError } from '../../core/errors';
 
 function createProvider(id: string, name = id): Provider {

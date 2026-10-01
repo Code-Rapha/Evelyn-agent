@@ -2,8 +2,8 @@ import * as assert from 'assert';
 import {
 	OpenAICompatibleProvider,
 	type FetchLike,
-} from '../../providers/openaiCompatible';
-import { InMemorySecretStore, providerApiKeyRef } from '../../providers/secrets';
+} from '../../core/providers/openaiCompatible';
+import { InMemorySecretStore, providerApiKeyRef } from '../../core/providers/secrets';
 import { ProviderError, ValidationError } from '../../core/errors';
 
 interface RecordedCall {
