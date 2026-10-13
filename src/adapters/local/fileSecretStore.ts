@@ -12,14 +12,17 @@
  * of `settings.json`, out of logs and out of git. It is not a substitute for
  * the OS keychain — that is what `VsCodeSecretStore` is for. Whoever hardens
  * this later should prefer the platform keyring over this file.
+ *
+ * Writes are queued behind one another and swap the file atomically, so a
+ * crash mid-write costs a stray temp file, never the credentials file.
  */
-import { readFile, writeFile, mkdir, rm, chmod } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile, rm, chmod } from 'node:fs/promises';
 import { StorageError } from '../../core/errors';
 import {
 	assertValidSecretRef,
 	type SecretStore,
 } from '../../core/providers/secrets';
+import { writeFileAtomic } from './writeFileAtomic';
 
 /** Owner read/write only. On Windows this maps to the user's ACL. */
 const OWNER_ONLY = 0o600;
@@ -80,17 +83,24 @@ export class FileSecretStore implements SecretStore {
 
 	/** Writes the cache to disk, queued behind any in-flight write. */
 	private persist(): Promise<void> {
-		this.pending = this.pending.then(async () => {
+		const run = async (): Promise<void> => {
 			const data = this.cache ?? {};
-			await mkdir(dirname(this.options.filePath), { recursive: true });
-			await writeFile(this.options.filePath, `${JSON.stringify(data, null, 2)}\n`, {
-				encoding: 'utf8',
+			await writeFileAtomic(this.options.filePath, `${JSON.stringify(data, null, 2)}\n`, {
 				mode: OWNER_ONLY,
 			});
-			// `mode` is ignored when the file already exists, so re-assert it.
+			// The mode is set on the temp file the swap brings in; re-assert it
+			// anyway in case the platform quietly dropped it.
 			await chmod(this.options.filePath, OWNER_ONLY).catch(() => undefined);
-		});
-		return this.pending;
+		};
+		const next = this.pending.then(run, run);
+		// The chain must never stay rejected: one failed write would otherwise
+		// skip every write after it and brick the store for the rest of the
+		// session. Same re-arm the data store's queue uses.
+		this.pending = next.then(
+			() => undefined,
+			() => undefined,
+		);
+		return next;
 	}
 
 	async get(ref: string): Promise<string | undefined> {

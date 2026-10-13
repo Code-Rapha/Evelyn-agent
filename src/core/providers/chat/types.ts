@@ -17,6 +17,17 @@ export interface ChatMessage {
 	readonly content: string;
 	/** Set on `tool` messages to answer a tool call. */
 	readonly toolCallId?: string;
+	/**
+	 * Set on the `assistant` message that asked for the calls its following
+	 * `tool` messages answer.
+	 *
+	 * OpenAI's wire format makes this mandatory: a `tool` message must respond
+	 * to an id announced by a preceding assistant `tool_calls` array, and a
+	 * strict server rejects the request without it. The `content` still carries
+	 * the human-readable `[tool calls: …]` summary — the transcript the user
+	 * reads does not change, only what the server is now also told.
+	 */
+	readonly toolCalls?: readonly ToolCallRequest[];
 }
 
 /** A tool the caller offers the model. Wire format follows OpenAI. */
@@ -51,9 +62,22 @@ export interface ChatRequest {
  *
  * Exactly one terminal event ends a successful stream: `Done`. `Error` ends a
  * failed one. Neither is ever followed by more events.
+ *
+ * Exception: an abort, and a consumer closing the stream early, end it with
+ * *no* terminal event at all — those outcomes are read from
+ * `ChatStream.closedReason`, never from an event.
  */
 export type ChatStreamEvent =
 	| { readonly type: 'TextDelta'; readonly text: string }
+	/**
+	 * The thinking phase of a reasoning model, separate from the answer.
+	 *
+	 * A consumer that wants to show a "thinking" indicator must not have to
+	 * infer it from silence: on a reasoning model `content` is empty for the
+	 * whole phase, and without this event a healthy stream is indistinguishable
+	 * from a hung connection.
+	 */
+	| { readonly type: 'ReasoningDelta'; readonly text: string }
 	| { readonly type: 'ToolCallDelta'; readonly call: ToolCallRequest }
 	| { readonly type: 'Done'; readonly finishReason?: string }
 	| { readonly type: 'Error'; readonly error: Error };

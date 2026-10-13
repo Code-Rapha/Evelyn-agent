@@ -1,0 +1,1602 @@
+/*
+ * Styles for the desktop chat window.
+ *
+ * Dark to match the window's `backgroundColor`, so there is no white flash
+ * between the frame appearing and the page painting. Colours come from custom
+ * properties rather than being repeated, which keeps a restyle to one block.
+ *
+ * The sidebar scrolls as one column rather than each panel scrolling
+ * separately: nested scroll areas in a 300px column make it hard to tell which
+ * one the pointer is over.
+ */
+
+:root {
+	color-scheme: dark;
+
+	/*
+ * The window's own chrome, standing in for the OS frame that `frame: false`
+ * removed. It is the parent of `.app` and of the resize handles rather than a
+ * wrapper around them, because `.app` has a radius and a clip and would take
+ * the east and south handles with it.
+ */
+.frame {
+	display: flex;
+	flex-direction: column;
+	height: 100vh;
+	border-radius: 12px;
+	/* Clips the titlebar to the top corners. The handles are `position: fixed`
+	   and so are not affected by this, which is exactly why they live here. */
+	overflow: hidden;
+}
+
+.titlebar {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	height: 36px;
+	padding: 0 0 0 14px;
+	background: rgb(8 21 13 / 92%);
+	border-bottom: 1px solid rgb(122 200 152 / 12%);
+	/*
+	 * The drag region. Chromium moves the window for a pointer press anywhere in
+	 * this box, which is what a title bar is for — and why the three buttons
+	 * inside it must be `no-drag`, or their clicks are eaten by the drag.
+	 */
+	-webkit-app-region: drag;
+	app-region: drag;
+}
+
+.titlebar h1 {
+	margin: 0;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--muted);
+	letter-spacing: 0.01em;
+	user-select: none;
+}
+
+.window-controls {
+	display: flex;
+	align-items: stretch;
+	height: 100%;
+	margin-left: auto;
+}
+
+.window-button {
+	/* Opts back out of the drag region above. Without this the whole right end
+	   of the title bar moves the window instead of the buttons. */
+	-webkit-app-region: no-drag;
+	app-region: no-drag;
+	width: 46px;
+	height: 100%;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	color: var(--muted);
+	cursor: default;
+	/* Drawn with pseudo-elements rather than glyphs: the page sets `system-ui`,
+	   so a character like `─` would draw differently per machine, and the CSP
+	   (`default-src 'none'`) rules out an icon font or an image. */
+	position: relative;
+}
+
+.window-button:hover {
+	background: rgb(122 200 152 / 12%);
+	color: var(--text);
+	filter: none;
+}
+
+.window-button:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+/* A 10px bar for minimise. */
+.window-button::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	margin: auto;
+}
+
+#window-minimize::before {
+	width: 10px;
+	height: 1px;
+}
+
+/*
+ * Maximise is a single outlined square, and two overlapping squares when the
+ * window is maximised. The switch is on `body[data-maximized]` rather than a
+ * class on the button, because the state arrives from main and belongs to the
+ * window, not to the control.
+ */
+#window-maximize::before {
+	width: 10px;
+	height: 10px;
+	border: 1px solid currentColor;
+}
+
+body[data-maximized='true'] #window-maximize::before {
+	width: 8px;
+	height: 8px;
+	/* Lifted up-left so it overlaps the outline left behind, the way the OS
+	   glyph does. */
+	transform: translate(-2px, 2px);
+	box-shadow: 2px -2px 0 -1px var(--background);
+}
+
+/* A cross for close. Two bars, so `::before` and `::after` share the rule. */
+.window-close::before,
+.window-close::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	margin: auto;
+	width: 10px;
+	height: 1px;
+	background: currentColor;
+}
+
+.window-close::before {
+	transform: rotate(45deg);
+}
+
+.window-close::after {
+	transform: rotate(-45deg);
+}
+
+.window-close:hover {
+	background: var(--failed);
+	color: var(--on-accent);
+}
+
+/* ── resize handles ──────────────────────────────────────────────────────── */
+
+/*
+ * Eight invisible strips around the frame.
+ *
+ * `position: fixed` against the viewport, which is the window, so they track the
+ * window edges without any JavaScript and survive a resize. They sit above the
+ * content in z-order so a drag starting on the last few pixels of the composer
+ * still resizes rather than selecting text.
+ *
+ * 6px is the width: enough to hit without aiming, thin enough that it does not
+ * noticeably shrink the usable area. The corners are wider squares and take
+ * priority, since a drag there should move both edges at once.
+ */
+.resize-handle {
+	position: fixed;
+	z-index: 20;
+}
+
+.resize-n,
+.resize-s {
+	left: 8px;
+	right: 8px;
+	height: 6px;
+	cursor: ns-resize;
+}
+
+.resize-n {
+	top: 0;
+}
+
+.resize-s {
+	bottom: 0;
+}
+
+.resize-e,
+.resize-w {
+	top: 8px;
+	bottom: 8px;
+	width: 6px;
+	cursor: ew-resize;
+}
+
+.resize-e {
+	right: 0;
+}
+
+.resize-w {
+	left: 0;
+}
+
+.resize-nw,
+.resize-ne,
+.resize-se,
+.resize-sw {
+	width: 12px;
+	height: 12px;
+}
+
+.resize-nw {
+	top: 0;
+	left: 0;
+	cursor: nwse-resize;
+}
+
+.resize-ne {
+	top: 0;
+	right: 0;
+	cursor: nesw-resize;
+}
+
+.resize-se {
+	bottom: 0;
+	right: 0;
+	cursor: nwse-resize;
+}
+
+.resize-sw {
+	bottom: 0;
+	left: 0;
+	cursor: nesw-resize;
+}
+
+/*
+ * No handles while maximised. The window fills the work area, so an edge drag
+ * would resize the screen-sized bounds and drag the window off the display
+ * instead of resizing anything.
+ */
+body[data-maximized='true'] .resize-handle {
+	display: none;
+}
+
+/*
+ * A layered dark green. Opaque at the base, translucent above it.
+	 *
+	 * The window itself cannot be see-through — on Windows `transparent: true`
+	 * takes the native frame with it, and the frame is what carries the title
+	 * bar and the resize borders. So the depth is built from stacked
+	 * translucent layers over a solid floor instead: `--background` is opaque,
+	 * and everything above it composites onto it.
+	 *
+	 * `--background` is mirrored as the `BrowserWindow` `backgroundColor` in
+	 * `desktop/main.ts`. They have to be the same value: the window paints the
+	 * first frame before the renderer runs, and a mismatch reads as a flash on
+	 * launch and as a seam around the rounded corners.
+	 *
+	 * The layers above it stay translucent on purpose. That is what makes the
+	 * sidebar, the panels and the composer sit *on* something rather than being
+	 * flat rectangles, and it costs nothing now that there is a real floor
+	 * underneath.
+	 */
+	--background: #08150d;
+	--surface: rgb(12 27 18 / 86%);
+	--surface-raised: rgb(21 40 29 / 90%);
+	--border: rgb(122 200 152 / 20%);
+	--text: #e8f3ec;
+	--muted: #9db3a7;
+	--accent: #63d9a0;
+	--accent-soft: rgb(99 217 160 / 16%);
+	--ok: #5fdc9a;
+	--failed: #ff6b63;
+
+	/*
+	 * Readability on a see-through window is the one thing an alpha cannot be
+	 * trusted with, so the buttons that carry a fill carry their own opaque
+	 * text colour instead of borrowing the window's.
+	 */
+	--on-accent: #06120c;
+
+	/*
+	 * Risk colours, kept amber and red on purpose: these are the two states the
+	 * permission card exists to separate, and tinting them green would make the
+	 * dangerous one look like the ordinary one.
+	 */
+	--risk-moderate: #e0a33e;
+	--risk-dangerous: #e0555a;
+
+	--radius: 10px;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+/*
+ * Transparent all the way down, because the window is: `frame: false` plus
+ * `transparent: true` means the desktop shows through wherever nothing is
+ * painted. Painting the body here would cover it again.
+ */
+html,
+body {
+	background: transparent;
+	height: 100%;
+}
+
+body {
+	margin: 0;
+	color: var(--text);
+	font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+	font-size: 14px;
+	line-height: 1.5;
+}
+
+.app {
+	display: grid;
+	grid-template-rows: auto auto 1fr;
+	/* Inside `.frame`, so the titlebar's 36px is above it rather than beside
+	   it — and `min-height: 0` is what lets `.messages` scroll rather than
+	   pushing the composer out of the window. */
+	flex: 1;
+	min-height: 0;
+	background: var(--background);
+	/*
+	 * The window's own edge. With no OS frame there is nothing to draw one, and
+	 * over a light desktop the panel would otherwise have no boundary against
+	 * the wallpaper at all.
+	 */
+	box-shadow: inset 0 0 0 1px rgb(122 200 152 / 14%);
+}
+
+/* ── topbar ───────────────────────────────────────────────────────────────── */
+
+.topbar {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	padding: 10px 24px;
+	/* Free of the drawer and of the message flow, so the tint here is the only
+	   thing painting — the desktop still shows through. */
+}
+
+/*
+ * Right-aligned rather than centred. The app name moved up into the titlebar
+ * when the OS frame was replaced, and what is left here is the one thing the
+ * user glances at when something is wrong — which belongs at the edge a failing
+ * dot is actually noticed at.
+ */
+.topbar .status {
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
+	color: var(--muted);
+}
+
+/*
+ * The settings menu.
+
+ * Three lines, drawn rather than typed: a `≡` glyph would render differently
+ * per machine under `system-ui`, and the CSP (`default-src 'none'`) rules out
+ * an icon font or an image file.
+ */
+.menu-button {
+	width: 30px;
+	height: 26px;
+	padding: 0;
+	flex: none;
+	background: transparent;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	position: relative;
+}
+
+.menu-button:hover:not(:disabled) {
+	background: var(--surface-raised);
+	border-color: var(--accent);
+	filter: none;
+}
+
+.menu-button:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+
+.menu-button::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	margin: auto;
+	width: 14px;
+	height: 9px;
+	/* Three rules from one box: a repeating gradient rather than three
+	   pseudo-elements, since only `::before` and `::after` exist. */
+	background: repeating-linear-gradient(
+		to bottom,
+		currentColor 0 1px,
+		transparent 1px 4px
+	);
+	color: var(--text);
+}
+
+/* ── window roles ────────────────────────────────────────────────────────── */
+
+/*
+ * The two windows share this document and differ only in which panels they
+ * show, decided here from `data-window` rather than by a second copy of the
+ * markup — the renderer looks every id up by name, so a panel present in only
+ * one layout would throw on startup in the other.
+ *
+ * The settings window has no transcript to show, so its drawer becomes the
+ * whole window rather than an overlay.
+ */
+body[data-window='settings'] .app {
+	display: none;
+}
+
+body[data-window='settings'] .edge-handle,
+body[data-window='settings'] .scrim {
+	display: none;
+}
+
+body[data-window='settings'] .drawer {
+	position: static;
+	width: 100%;
+	max-width: none;
+	/*
+	 * The remaining space, not `100%`.
+	 *
+	 * `.frame` is a flex column holding the title bar and this drawer, so a
+	 * drawer sized at `100%` would be a full window height *plus* the 36px title
+	 * bar above it. `.frame` clips its overflow, and the clipped 36px would be
+	 * the bottom of the last panel — which is the system prompt, the one control
+	 * that has to be reachable.
+	 */
+	flex: 1;
+	min-height: 0;
+	height: auto;
+	overflow: hidden;
+	opacity: 1;
+	transform: none;
+	visibility: visible;
+	box-shadow: none;
+	border-right: 0;
+	background: var(--background);
+}
+
+/*
+ * The drawer in the settings window is the window, so the `hidden` attribute
+ * that drives the chat window's slide has to be ignored here.
+ *
+ * This is the rule that made the settings window come up empty: the general
+ * `.drawer[hidden]` is specificity (0,2,0), and without this override the
+ * attribute won — leaving the title bar and nothing else. The selector has to
+ * be this specific or it loses to nothing and wins over nothing.
+ */
+body[data-window='settings'] .drawer[hidden] {
+	display: flex;
+	opacity: 1;
+	transform: none;
+	visibility: visible;
+}
+
+body[data-window='settings'] .drawer-head h2 {
+	font-size: 15px;
+	color: var(--text);
+}
+
+/* Only one of the two panel sets is ever on screen in a given window. */
+.only-chat {
+	display: none;
+}
+
+body[data-window='settings'] .only-chat {
+	display: none;
+}
+
+body[data-window='chat'] .only-settings {
+	display: none;
+}
+
+body:not([data-window]) .only-settings {
+	display: none;
+}
+
+/* In the settings window the drawer is the window, so its own panels stop
+   being nested boxes. */
+body[data-window='settings'] .drawer .panel > details > summary {
+	border: 0;
+	padding-left: 0;
+	padding-right: 0;
+	background: transparent;
+}
+
+body[data-window='settings'] .drawer .panel > details[open] > summary {
+	border-bottom-color: transparent;
+}
+
+body[data-window='settings'] .drawer .panel > details > .panel-body {
+	border: 0;
+	padding-left: 0;
+	padding-right: 0;
+	background: transparent;
+}
+
+/* Visible to a screen reader, invisible on screen. Used for a label that would
+   otherwise be read out before the select it names. */
+.visually-hidden {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
+
+.topbar .status #version {
+	opacity: 0.7;
+}
+
+/* The bridge is missing — nothing in the window will work, so this is the one
+   message allowed out of the drawer. */
+.core-error {
+	margin: 0 24px 12px;
+}
+
+/* ── settings drawer ──────────────────────────────────────────────────────── */
+
+.scrim {
+	position: fixed;
+	inset: 0;
+	background: rgb(4 12 7 / 45%);
+	z-index: 10;
+	opacity: 0;
+	/*
+	 * Fades rather than appearing: the scrim covers the conversation, and a
+	 * hard cut to a dark overlay reads as the window breaking rather than as
+	 * something opening over it.
+	 */
+	transition: opacity 0.3s ease;
+}
+
+.scrim[hidden] {
+	display: block;
+	opacity: 0;
+	visibility: hidden;
+	transition: opacity 0.26s ease, visibility 0s linear 0.26s;
+}
+
+.drawer {
+	position: fixed;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	width: 340px;
+	max-width: 86vw;
+	display: flex;
+	flex-direction: column;
+	/* Opaque enough to read a form against whatever is behind the window: the
+	   fields are the most text-dense surface in the app. */
+	background: rgb(10 23 15 / 97%);
+	border-right: 1px solid var(--border);
+	box-shadow: 8px 0 32px rgb(0 0 0 / 45%);
+	z-index: 11;
+	/*
+	 * Opens on an ease-out curve and closes on a plain ease, at different speeds.
+	 *
+	 * The drawer answers a pointer that is already in motion, so it has to be
+	 * leaving quickly and arriving gently: a symmetric slide-out makes the menu
+	 * feel like it is chasing the cursor away. The two are separate rules because
+	 * a single transition on both states would ease both directions identically.
+	 *
+	 * `opacity` rides along with the slide so the panel does not appear to drag
+	 * its own edge — without it the 340px of green holds full strength while
+	 * moving, which is what makes a naive slide look like a cardboard panel.
+	 */
+	/*
+ * Opens and closes as a fade. Deliberately not a slide.
+ *
+ * A slide moves 340px of panel across the screen, and that motion is what the
+ * reduced-motion preference is about — so a slide would mean the drawer is
+ * unusable for anyone whose system has animations off, which is a setting many
+ * machines ship with. Opacity alone carries open and closed just as clearly and
+ * crosses nobody's field of view.
+ *
+ * The consequence is that the `prefers-reduced-motion` block further down does
+ * not mention the drawer at all: there is no movement left to suppress, so the
+ * preference is already satisfied and the fade runs on every machine. That is
+ * the whole reason for the change, and it is why the durations are short — a
+ * fade has nothing to show off at two seconds.
+ */
+transform: none;
+	opacity: 1;
+	transition: opacity 0.28s ease-out;
+}
+
+.drawer[hidden] {
+	display: flex;
+	opacity: 0;
+	/*
+	 * `visibility`, not `display: none`, so the fade is actually seen. It is
+	 * delayed to the end of the opacity so the drawer stays painted while it
+	 * changes, and it takes the whole drawer out of the tab order once closed —
+	 * which is the part that matters, because an invisible panel full of form
+	 * fields would otherwise still be reachable with Tab.
+	 */
+	visibility: hidden;
+	transition: opacity 0.22s ease-in, visibility 0s linear 0.22s;
+}
+
+/*
+ * Reduced motion.
+ *
+ * The drawer is not listed here, and that is the point of it being a fade: a
+ * transition on opacity moves nothing, so there is no motion to suppress and
+ * the preference is satisfied by the design rather than by a rule. An earlier
+ * version slid the drawer, and had to answer this query with `transition: none`
+ * — which removed the movement but also removed the fade, leaving the panel to
+ * snap between two states. That reads as a broken menu, not as a considerate
+ * one.
+ *
+ * What remains here is genuinely decorative motion: the pulsing dots and the
+ * grip's colour change. Neither carries meaning.
+ */
+@media (prefers-reduced-motion: reduce) {
+	.edge-handle-grip {
+		transition: none;
+	}
+
+	.thinking-dots::before,
+	.thinking-dots::after {
+		animation: none;
+		opacity: 0.6;
+	}
+
+	.message.streaming .bubble::after {
+		animation: none;
+	}
+}
+
+.drawer-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 14px 16px;
+	border-bottom: 1px solid var(--border);
+}
+
+.drawer-head h2 {
+	font-size: 12px;
+}
+
+.drawer-body {
+	flex: 1;
+	overflow-y: auto;
+	padding: 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.drawer-foot {
+	border-top: 1px solid var(--border);
+	padding: 10px 16px;
+	overflow-wrap: anywhere;
+}
+
+/*
+ * The drawer holds one accordion column, so the panels nest one level deeper
+ * than they used to in the sidebar. Their own background would double the
+ * opacity over the drawer and flatten the translucency.
+ */
+.drawer .panel {
+	background: transparent;
+	padding: 0;
+	border: 0;
+}
+
+.drawer .panel > details > summary {
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--background);
+}
+
+.drawer .panel > details[open] > summary {
+	border-radius: var(--radius) var(--radius) 0 0;
+	border-bottom-color: transparent;
+}
+
+.drawer .panel > details > .panel-body {
+	border: 1px solid var(--border);
+	border-top: 0;
+	border-radius: 0 0 var(--radius) var(--radius);
+	padding: 12px;
+	background: color-mix(in srgb, var(--background) 60%, transparent);
+}
+
+/* ── edge handle ─────────────────────────────────────────────────────────── */
+
+/*
+ * The strip down the left edge that opens the menu.
+ *
+ * A button so the menu is reachable by keyboard and on touch; the hover that
+ * opens it is on `:hover` below, layered over a control that already works on
+ * click. Kept narrow — 20px — because it sits over the app's own left margin,
+ * and anything wider would eat clicks meant for the transcript.
+ *
+ * It stays above the drawer in z-order (`13` against the drawer's `11`), so the
+ * pointer can always reach the edge to dismiss what the edge opened. Without
+ * that the drawer would cover the only handle that can close it, and the user
+ * would be pinned to a menu they opened by accident.
+ */
+.edge-handle {
+	position: fixed;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	width: 20px;
+	padding: 0;
+	background: transparent;
+	border: 0;
+	border-right: 1px solid transparent;
+	cursor: pointer;
+	z-index: 13;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+/*
+ * The visible part is only the grip; the button itself is a transparent target.
+ * A tinted 20px column down the side of the window would read as a broken
+ * layout rather than an affordance.
+ */
+.edge-handle-grip {
+	width: 3px;
+	height: 44px;
+	border-radius: 999px;
+	background: var(--border);
+	transition: background 0.15s ease;
+}
+
+.edge-handle:hover .edge-handle-grip,
+.edge-handle:focus-visible .edge-handle-grip,
+.edge-handle[aria-expanded='true'] .edge-handle-grip {
+	background: var(--accent);
+}
+
+.edge-handle:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.edge-handle-grip {
+		transition: none;
+	}
+}
+
+/* ── icon button ─────────────────────────────────────────────────────────── */
+
+.icon-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 38px;
+	height: 38px;
+	padding: 0;
+	flex: none;
+	background: var(--surface-raised);
+	color: var(--text);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	font-size: 16px;
+	line-height: 1;
+}
+
+.icon-button:hover:not(:disabled) {
+	color: var(--accent);
+	border-color: var(--accent);
+	filter: none;
+}
+
+.muted {
+	color: var(--muted);
+}
+
+.small {
+	font-size: 12px;
+}
+
+.status {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 13px;
+}
+
+.dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--muted);
+	flex: none;
+}
+
+.dot.ok {
+	background: var(--ok);
+}
+
+.dot.failed {
+	background: var(--failed);
+}
+
+.panel {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--background);
+}
+
+/* Collapsible sections share one summary style, so the drawer reads as a
+   column of accordions rather than a mix of open and closed boxes. */
+details > summary {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	cursor: pointer;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--muted);
+	list-style: none;
+}
+
+details > summary::-webkit-details-marker {
+	display: none;
+}
+
+details > summary::before {
+	content: "▸";
+	font-size: 9px;
+	transition: transform 0.15s ease;
+}
+
+details[open] > summary::before {
+	transform: rotate(90deg);
+}
+
+details > summary:hover {
+	color: var(--text);
+}
+
+.summary-title {
+	flex: none;
+}
+
+/* Truncates so a long provider name cannot widen the drawer. */
+#provider-current {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	/* Opened by the user rather than by default. */
+	text-transform: none;
+	letter-spacing: 0;
+	font-weight: 400;
+}
+
+.panel-body {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	margin-top: 10px;
+}
+
+.panel-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+h2 {
+	margin: 0;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+.stack {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+label {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	font-size: 12px;
+	color: var(--muted);
+}
+
+label.block {
+	margin-top: 2px;
+}
+
+input,
+select,
+textarea {
+	padding: 8px 10px;
+	background: var(--surface);
+	color: var(--text);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	font: inherit;
+	font-size: 13px;
+	width: 100%;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+	outline: 2px solid var(--accent);
+	outline-offset: -1px;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled,
+button:disabled {
+	opacity: 0.5;
+}
+
+input[readonly] {
+	background: var(--surface-raised);
+	color: var(--muted);
+	cursor: default;
+}
+
+textarea {
+	resize: vertical;
+	font-family: inherit;
+}
+
+button {
+	padding: 8px 14px;
+	background: var(--accent);
+	color: var(--on-accent);
+	border: none;
+	border-radius: 8px;
+	font: inherit;
+	font-weight: 600;
+	font-size: 13px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+button:hover:not(:disabled) {
+	filter: brightness(1.1);
+}
+
+button.secondary {
+	background: var(--surface-raised);
+	color: var(--text);
+	border: 1px solid var(--border);
+}
+
+button.danger {
+	background: transparent;
+	color: var(--failed);
+	border: 1px solid var(--failed);
+}
+
+button.subtle {
+	padding: 5px 10px;
+	font-size: 12px;
+	font-weight: 500;
+}
+
+.row {
+	display: flex;
+	gap: 8px;
+}
+
+.row > * {
+	flex: 1;
+}
+
+.row.end {
+	justify-content: flex-end;
+}
+
+.row.end > * {
+	flex: none;
+}
+
+.error {
+	margin: 0;
+	padding: 8px 10px;
+	border: 1px solid var(--failed);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--failed) 10%, transparent);
+	color: var(--failed);
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+
+.ok {
+	margin: 0;
+	padding: 8px 10px;
+	border: 1px solid var(--ok);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--ok) 10%, transparent);
+	color: var(--ok);
+	font-size: 12px;
+}
+
+/* ── conversation list ───────────────────────────────────────────────────── */
+
+.conversations {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	overflow-y: auto;
+}
+
+.conversations li {
+	display: flex;
+}
+
+.conversation {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	padding: 8px 10px;
+	border: 1px solid transparent;
+	border-radius: 8px;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+	min-width: 0;
+}
+
+.conversation:hover {
+	background: var(--surface-raised);
+}
+
+.conversation.selected {
+	background: var(--accent-soft);
+	border-color: var(--accent);
+}
+
+.conversation .name {
+	font-size: 13px;
+	font-weight: 500;
+	/* Long titles truncate rather than widening the column. */
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.conversation .meta {
+	font-size: 11px;
+	color: var(--muted);
+}
+
+/* ── chat ────────────────────────────────────────────────────────────────── */
+
+.chat {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+}
+
+.system {
+	padding: 12px 24px;
+	border-bottom: 1px solid var(--border);
+	background: var(--surface-raised);
+}
+
+.system summary {
+	cursor: pointer;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--muted);
+	margin-bottom: 8px;
+}
+
+.system textarea {
+	margin-bottom: 8px;
+}
+
+.messages {
+	flex: 1;
+	/*
+	 * `min-height: 0` is what lets this actually scroll. A flex item defaults
+	 * to `min-height: auto`, which refuses to shrink below its content — with
+	 * that the transcript would push the composer off the bottom of the window
+	 * instead of scrolling.
+	 */
+	min-height: 0;
+	overflow-y: auto;
+	padding: 24px 28px 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+
+.empty {
+	margin: auto;
+	color: var(--muted);
+	text-align: center;
+	max-width: 42ch;
+}
+
+/*
+ * The thinking phase of a reasoning model.
+ *
+ * Deliberately quieter than a message bubble and collapsible: it is diagnostic,
+ * not content. The default shows only the label, because the reasoning is long
+ * and reading it while the answer streams past would be the wrong priority.
+ *
+ * `aria-live` is on the container, not the text: the text node is rewritten on
+ * every delta, and a live region over a node that changes that often floods a
+ * screen reader with partial words.
+ */
+.thinking {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	/* Aligned with the composer's inset, so the two read as one column rather
+	   than as a full-width strip and a narrower bar. */
+	margin: 8px 28px 0;
+	padding: 10px 14px;
+	border: 1px dashed var(--border);
+	border-radius: var(--radius);
+	background: color-mix(in srgb, var(--surface) 60%, transparent);
+}
+
+.thinking-label {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+/* Three dots that cycle, drawn with one pseudo-element per dot. */
+.thinking-dots {
+	display: inline-flex;
+	gap: 3px;
+}
+
+.thinking-dots::before,
+.thinking-dots::after,
+.thinking-dots {
+	color: var(--accent);
+}
+
+.thinking-dots::before,
+.thinking-dots::after {
+	content: "•";
+	animation: thinking-pulse 1.2s infinite ease-in-out;
+}
+
+.thinking-dots::after {
+	animation-delay: 0.2s;
+}
+
+@keyframes thinking-pulse {
+	0%,
+	80%,
+	100% {
+		opacity: 0.25;
+	}
+	40% {
+		opacity: 1;
+	}
+}
+
+/*
+ * Honoured as a system preference, and also switched off here: the block is
+ * hidden until asked for, so the animation is a cost with no reader.
+ */
+@media (prefers-reduced-motion: reduce) {
+	.thinking-dots::before,
+	.thinking-dots::after {
+		animation: none;
+		opacity: 0.6;
+	}
+}
+
+.thinking-text {
+	margin: 0;
+	max-height: 11em;
+	overflow-y: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-size: 12.5px;
+	color: var(--muted);
+}
+
+/* Only present once there is something to read. */
+.thinking-text:empty {
+	display: none;
+}
+
+.thinking-toggle {
+	align-self: flex-start;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: var(--muted);
+	font: inherit;
+	font-size: 12px;
+	text-decoration: underline;
+	cursor: pointer;
+}
+
+.thinking-toggle:hover {
+	color: var(--text);
+}
+
+.message {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	max-width: 78ch;
+}
+
+.message .role {
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+.message .bubble {
+	padding: 10px 14px;
+	border-radius: var(--radius);
+	background: var(--surface);
+	overflow-wrap: anywhere;
+	/* A long unbroken run of characters must not widen the column. */
+	white-space: pre-wrap;
+}
+
+.message.user {
+	align-self: flex-end;
+	align-items: flex-end;
+}
+
+.message.user .bubble {
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+.message.system {
+	align-self: stretch;
+	max-width: none;
+}
+
+.message.system .bubble {
+	background: transparent;
+	border: 1px dashed var(--border);
+	color: var(--muted);
+	font-style: italic;
+}
+
+/* Tool steps are the agent's intermediate work: visually distinct from the
+   model's own words so the final answer is not confused with a tool's output. */
+.message.tool {
+	align-self: stretch;
+	max-width: none;
+}
+
+.message.tool .bubble {
+	background: var(--surface-raised);
+	border: 1px solid var(--border);
+	color: var(--muted);
+	font-size: 13px;
+}
+
+.message.tool .role {
+	color: var(--accent);
+}
+
+.message.toolError .bubble {
+	border: 1px solid var(--failed);
+	background: color-mix(in srgb, var(--failed) 8%, transparent);
+	color: var(--failed);
+}
+
+.message.toolError .role {
+	color: var(--failed);
+}
+
+.message.failed .bubble {
+	border: 1px solid var(--failed);
+	background: color-mix(in srgb, var(--failed) 10%, transparent);
+}
+
+.message.failed .role {
+	color: var(--failed);
+}
+
+/* The caret shown on the message currently receiving deltas. */
+.message.streaming .bubble::after {
+	content: "▍";
+	margin-left: 1px;
+	color: var(--accent);
+	animation: blink 1s steps(2, start) infinite;
+}
+
+@keyframes blink {
+	to {
+		visibility: hidden;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.message.streaming .bubble::after {
+		animation: none;
+	}
+}
+
+/*
+ * The composer: a HUD pinned to the bottom of the conversation.
+ *
+ * Flush to the bottom edge — no margin below it. A gap under the bar read as a
+ * strip of unused window, and the point of this element is that it is the floor
+ * of the window rather than a card resting in it. The side margins stay, so it
+ * reads as a HUD over the conversation instead of a full-bleed chrome band.
+ *
+ * In flow rather than absolutely positioned. An absolute composer would let the
+ * transcript scroll under it, which is the prettier effect and the one that
+ * breaks: `thinking` and the permission card come after `.messages` in the DOM,
+ * so they would be laid out underneath a floating bar whose height changes with
+ * the text, and they would end up hidden behind it.
+ */
+.composer {
+	flex: none;
+	margin: 8px 28px 0;
+	padding: 12px 12px 14px;
+	border: 1px solid var(--border);
+	border-bottom: 0;
+	/* Square against the window edge, rounded where it meets the transcript.
+	   The bottom pair is moot: `.app`'s own radius clips them away. */
+	border-radius: 14px 14px 0 0;
+	background: rgb(12 27 18 / 82%);
+	box-shadow: 0 -8px 32px rgb(0 0 0 / 40%);
+}
+
+.composer .error {
+	margin-bottom: 12px;
+}
+
+/*
+ * Why Send is disabled.
+ *
+ * Sits above the input rather than as a tooltip: `disabled` buttons do not
+ * fire `mouseenter`, so a tooltip on the button itself would never appear in
+ * the one case it was written for.
+ */
+.send-hint {
+	margin: 0 0 12px;
+	font-size: 12.5px;
+	color: var(--muted);
+}
+
+.composer-row {
+	display: flex;
+	gap: 10px;
+	align-items: flex-end;
+}
+
+.composer-row textarea {
+	flex: 1;
+	/* Grows with what is typed, up to a ceiling — the HUD should not eat the
+	   transcript once the user is writing a long message. */
+	min-height: 38px;
+	max-height: 160px;
+	resize: none;
+	background: transparent;
+	border-color: transparent;
+}
+
+.composer-row textarea:focus {
+	background: color-mix(in srgb, var(--surface-raised) 60%, transparent);
+	border-color: var(--border);
+}
+
+.composer-actions {
+	display: flex;
+	gap: 8px;
+	flex: none;
+}
+
+/*
+ * The one affirmative control in the window, so it is the largest button here.
+ * Sized to match the input's 38px minimum rather than the base 34px, which
+ * makes the row read as "type here, then this" without needing an icon.
+ */
+.send {
+	min-width: 88px;
+	height: 38px;
+	font-size: 14px;
+}
+
+.composer-actions .secondary {
+	height: 38px;
+}
+
+/* ── Permission prompt ─────────────────────────────────────────────────────
+ *
+ * Deliberately louder than a message bubble: the turn is blocked on this, and
+ * the whole point is that it cannot be missed. Coloured by risk rather than by
+ * tool name, because risk is what the decision turns on — `write_file` and
+ * `run_command` look alike and should not, while a `dangerous` tool should not
+ * be able to hide behind an unremarkable border.
+ */
+.permission {
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--accent);
+	border-radius: 8px;
+	background: var(--surface-raised);
+	padding: 12px 14px;
+	/* Same inset as the composer; see the note there. */
+	margin: 10px 28px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.permission.risk-moderate {
+	border-left-color: var(--risk-moderate);
+}
+
+.permission.risk-dangerous {
+	border-left-color: var(--risk-dangerous);
+}
+
+/* `hidden` has to win over the flex layout above. The attribute is how the
+ * card is closed, and an author `display` beats the browser's own rule for
+ * it — without this the card is on screen from the first paint, empty. */
+.permission[hidden] {
+	display: none;
+}
+
+.permission-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.permission-tool {
+	font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+	font-size: 12px;
+	color: var(--text);
+}
+
+.permission-risk {
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	padding: 2px 7px;
+	border-radius: 999px;
+	border: 1px solid currentColor;
+	color: var(--risk-moderate);
+}
+
+.permission.risk-dangerous .permission-risk {
+	color: var(--risk-dangerous);
+}
+
+/* The × is a real control, not decoration: clicking it sends `deny`. Pushed to
+ * the end of the header row so it reads as a close affordance, and subdued so
+ * it never competes with Allow/Deny — but never invisible either, because a
+ * close the user cannot find is a close they will reach for Escape to fake. */
+.permission-close {
+	margin-left: auto;
+	background: transparent;
+	border: none;
+	color: var(--muted);
+	font-size: 16px;
+	line-height: 1;
+	padding: 2px 6px;
+	cursor: pointer;
+	border-radius: 4px;
+}
+
+.permission-close:hover {
+	color: var(--risk-dangerous);
+	background: rgb(224 85 90 / 12%);
+}
+
+.permission-action {
+	margin: 0;
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.permission-detail {
+	margin: 0;
+	font-size: 12px;
+	color: var(--muted);
+}
+
+/* Arguments: a definition list so a long path wraps inside its own row rather
+ * than stretching the card. Values are monospaced because they are literals. */
+.permission-args {
+	margin: 0;
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: 3px 10px;
+	font-size: 12px;
+}
+
+.permission-args:empty {
+	display: none;
+}
+
+.permission-args dt {
+	color: var(--muted);
+	font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+}
+
+.permission-args dd {
+	margin: 0;
+	font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+	overflow-wrap: anywhere;
+}
+
+.permission-workspace {
+	margin: 0;
+	font-size: 11px;
+	color: var(--muted);
+	font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+	overflow-wrap: anywhere;
+}
+
+.permission-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}
+
+/* Allow is the affirmative action, not the safe one. A button that looks like a
+ * green "go" would misrepresent what the user is agreeing to. */
+.danger-allow {
+	background: transparent;
+	border: 1px solid var(--risk-moderate);
+	color: var(--risk-moderate);
+	border-radius: 6px;
+	padding: 6px 14px;
+	cursor: pointer;
+	font-size: 13px;
+}
+
+.danger-allow:hover {
+	background: rgb(224 163 62 / 12%);
+}
+
+.permission.risk-dangerous .danger-allow {
+	border-color: var(--risk-dangerous);
+	color: var(--risk-dangerous);
+}
+
+.permission-note {
+	margin: 0;
+	font-size: 10px;
+	color: var(--muted);
+	text-align: right;
+}

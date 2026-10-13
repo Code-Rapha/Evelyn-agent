@@ -8,6 +8,7 @@ import {
 } from '../../core/providers/config';
 import { InMemorySecretStore, providerApiKeyRef } from '../../core/providers/secrets';
 import { ValidationError } from '../../core/errors';
+import type { FetchLike } from '../../core/providers/openaiCompatible';
 import type { Provider } from '../../core/providers/types';
 
 /**
@@ -293,6 +294,24 @@ suite('Foundation: provider configuration persistence', () => {
 		const [provider] = service.restoreAll(new InMemorySecretStore(), () => () => undefined);
 
 		assert.strictEqual(provider.descriptor.status, 'configured');
+	});
+
+	test('restoreAll forwards enabled:false and the restored provider refuses calls', async () => {
+		await service.save(config({ id: 'off', baseUrl: 'https://off.test/v1', enabled: false }));
+		const calls: string[] = [];
+		const fetch: FetchLike = async (url) => {
+			calls.push(url);
+			return { ok: true, status: 200, text: async () => JSON.stringify({ data: [] }) };
+		};
+
+		const [provider] = new ProviderConfigService(memento, fetch).restoreAll(
+			new InMemorySecretStore(),
+			() => () => undefined,
+		);
+
+		assert.strictEqual(provider.descriptor.status, 'disabled');
+		await assert.rejects(() => provider.listModels(), /"off" is disabled/);
+		assert.deepStrictEqual(calls, [], 'the restored provider must never reach the socket');
 	});
 
 	test('restoreAll skips malformed records instead of failing entirely', () => {

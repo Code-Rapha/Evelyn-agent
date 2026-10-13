@@ -113,6 +113,13 @@ export class OpenAICompatibleProvider implements Provider, ChatProvider {
 	 */
 	private status: ProviderStatus;
 	private models: readonly ModelInfo[];
+	/**
+	 * Whether calls are allowed at all.
+	 *
+	 * The flag arrives from persisted configuration and decides it: a disabled
+	 * provider refuses every method before it reads a secret or opens a socket.
+	 */
+	private readonly enabled: boolean;
 
 	/**
 	 * Built on read so callers always observe the current status and model
@@ -130,8 +137,13 @@ export class OpenAICompatibleProvider implements Provider, ChatProvider {
 
 		this.secrets = options.secrets;
 		this.apiKeyRef = options.apiKeyRef;
+		this.enabled = options.enabled ?? true;
 
-		this.status = options.apiKeyRef === undefined ? 'configured' : 'unconfigured';
+		this.status = !this.enabled
+			? 'disabled'
+			: options.apiKeyRef === undefined
+				? 'configured'
+				: 'unconfigured';
 		this.models = [];
 
 		this.base = {
@@ -148,12 +160,29 @@ export class OpenAICompatibleProvider implements Provider, ChatProvider {
 	}
 
 	/**
+	 * Refuses every call while the provider is disabled.
+	 *
+	 * The guard sits ahead of `buildHeaders` and `fetchImpl` because these two
+	 * methods are the only places in the product that touch the network — so
+	 * one check covers model discovery, chat, and every host that reaches
+	 * either (extension refresh, desktop "load models", the agent's turn).
+	 */
+	private requireEnabled(): void {
+		if (!this.enabled) {
+			throw new ProviderError(`Provider "${this.base.id}" is disabled`, {
+				details: { providerId: this.base.id },
+			});
+		}
+	}
+
+	/**
 	 * `GET {baseUrl}/models`, mapped to `ModelInfo[]`.
 	 *
 	 * The response only carries an `id` per model, so the display name is the
 	 * id: inventing a friendlier name would misreport what the server called it.
 	 */
 	async listModels(): Promise<readonly ModelInfo[]> {
+		this.requireEnabled();
 		const endpoint = `${this.baseUrl}/models`;
 
 		let models: ModelInfo[];
@@ -259,6 +288,7 @@ export class OpenAICompatibleProvider implements Provider, ChatProvider {
 		request: ChatRequest,
 		options: { readonly signal?: AbortSignal } = {},
 	): Promise<ChatStream> {
+		this.requireEnabled();
 		const endpoint = `${this.baseUrl}/chat/completions`;
 		const headers = {
 			...(await this.buildHeaders()),

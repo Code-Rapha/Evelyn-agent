@@ -50,6 +50,7 @@ function createProvider(
 		secrets: InMemorySecretStore;
 		withRef: boolean;
 		withoutSecrets: boolean;
+		enabled: boolean;
 	}> = {},
 ): { provider: OpenAICompatibleProvider; calls: RecordedCall[]; secrets: InMemorySecretStore } {
 	const secrets = overrides.secrets ?? new InMemorySecretStore();
@@ -72,6 +73,7 @@ function createProvider(
 		fetch,
 		...(overrides.withRef === false ? {} : { apiKeyRef: 'ref-key' }),
 		...(overrides.withoutSecrets === true ? {} : { secrets }),
+		...(overrides.enabled !== undefined ? { enabled: overrides.enabled } : {}),
 	});
 
 	return { provider, calls, secrets };
@@ -572,5 +574,51 @@ suite('Foundation: provider status transitions', () => {
 		for (const status of ['unconfigured', 'configured', 'available', 'error'] as const) {
 			assert.ok(!JSON.stringify({ ...provider.descriptor, status }).includes(secret));
 		}
+	});
+});
+
+suite('Foundation: disabled provider refuses network access', () => {
+	test('listModels on a disabled provider rejects and never calls fetch', async () => {
+		const { provider, calls } = createProvider({ enabled: false });
+
+		await assert.rejects(
+			() => provider.listModels(),
+			(error: unknown) =>
+				error instanceof ProviderError &&
+				error.category === 'provider' &&
+				/"test-provider" is disabled/.test(error.message),
+		);
+
+		assert.strictEqual(calls.length, 0, 'a disabled provider must never reach the socket');
+	});
+
+	test('streamChat on a disabled provider rejects and never calls fetch', async () => {
+		const { provider, calls } = createProvider({ enabled: false });
+
+		await assert.rejects(
+			() => provider.streamChat({ model: 'model-a', messages: [] }),
+			(error: unknown) =>
+				error instanceof ProviderError &&
+				error.category === 'provider' &&
+				/"test-provider" is disabled/.test(error.message),
+		);
+
+		assert.strictEqual(calls.length, 0, 'a disabled provider must never reach the socket');
+	});
+
+	test('a disabled provider reports status "disabled" and configuration.enabled false', () => {
+		const { provider } = createProvider({ enabled: false });
+
+		assert.strictEqual(provider.descriptor.status, 'disabled');
+		assert.strictEqual(provider.descriptor.configuration.enabled, false);
+	});
+
+	test('an enabled provider still reaches the endpoint', async () => {
+		const { provider, calls } = createProvider({ enabled: true });
+
+		await provider.listModels();
+
+		assert.strictEqual(calls.length, 1);
+		assert.strictEqual(provider.descriptor.status, 'available');
 	});
 });

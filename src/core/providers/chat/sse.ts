@@ -95,6 +95,16 @@ function parseBlock(block: string): SseEvent | undefined {
 /** One decoded chunk from an OpenAI-compatible chat completion. */
 export interface ChatCompletionChunk {
 	readonly text: string;
+	/**
+	 * The thinking phase of a reasoning model, when it sends one.
+	 *
+	 * `content` stays empty for the whole of that phase, so a stream that reports
+	 * only `text` looks like a stall followed by an answer that arrives out of
+	 * nowhere. Kept apart from `text` because it is not part of the answer: a
+	 * host that folded it in would show the model's private scratchpad as if the
+	 * user had asked for it.
+	 */
+	readonly reasoning: string;
 	readonly toolCalls: readonly {
 		readonly index: number;
 		readonly id?: string;
@@ -130,24 +140,45 @@ export function parseChatChunk(payload: string): ChatCompletionChunk | undefined
 	}
 
 	const first = choices[0] as {
-		delta?: { content?: unknown; tool_calls?: unknown };
+		delta?: {
+			content?: unknown;
+			reasoning_content?: unknown;
+			reasoning?: unknown;
+			tool_calls?: unknown;
+		};
 		finish_reason?: unknown;
 	};
 
 	const content = first.delta?.content;
 	const text = typeof content === 'string' ? content : '';
+	// Reasoning models name this field several ways across servers, and a stream
+	// that used a spelling we did not read would simply lose its thinking phase.
+	// Only one of them ever carries text in a given chunk, so reading them all
+	// cannot double-count.
+	const reasoningDelta = first.delta?.reasoning_content ?? first.delta?.reasoning;
+	const reasoning = typeof reasoningDelta === 'string' ? reasoningDelta : '';
 	const toolCalls = parseToolCallDeltas(first.delta?.tool_calls);
 	const finishReason =
 		typeof first.finish_reason === 'string' && first.finish_reason.length > 0
 			? first.finish_reason
 			: undefined;
 
-	if (text.length === 0 && toolCalls.length === 0 && finishReason === undefined) {
+	if (
+		text.length === 0 &&
+		reasoning.length === 0 &&
+		toolCalls.length === 0 &&
+		finishReason === undefined
+	) {
 		// A keepalive or an empty delta: nothing to report.
 		return undefined;
 	}
 
-	return { text, toolCalls, ...(finishReason !== undefined ? { finishReason } : {}) };
+	return {
+		text,
+		reasoning,
+		toolCalls,
+		...(finishReason !== undefined ? { finishReason } : {}),
+	};
 }
 
 /** Reads the OpenAI `tool_calls` delta array off a chunk. */

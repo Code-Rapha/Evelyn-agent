@@ -1,15 +1,22 @@
 /**
- * Storage boundary (Phase 1: interfaces only — the local-first storage layer
- * is NOT implemented yet).
+ * Storage boundary.
  *
- * Future structured Markdown memory lives under `~/.modelhub/`:
+ * Two layers live here:
  *
- *   ~/.modelhub/
- *   ├── memory/
- *   │   ├── personal/     (local-only by default, never auto-uploaded)
- *   │   └── projects/
- *   ├── rules/
- *   └── skills/
+ * 1. `StorageService` — the future structured Markdown memory layer. Phase 1
+ *    ships interfaces only; no implementation exists yet. It lives under
+ *    `~/.modelhub/`:
+ *
+ *      ~/.modelhub/
+ *      ├── memory/
+ *      │   ├── personal/     (local-only by default, never auto-uploaded)
+ *      │   └── projects/
+ *      ├── rules/
+ *      └── skills/
+ *
+ * 2. `DataStore` (in `./dataStore`) — the local persistence port for projects,
+ *    conversation history and non-sensitive configuration, which *is*
+ *    implemented, by `adapters/local/fileDataStore`.
  *
  * Future services must depend on these abstractions instead of touching
  * arbitrary filesystem paths or `fs` directly.

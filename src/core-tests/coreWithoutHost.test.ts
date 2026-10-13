@@ -17,7 +17,7 @@
  * way to show the Core working with no host at all.
  */
 import * as assert from 'assert';
-import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -220,6 +220,70 @@ suite('Core: runs without VS Code', () => {
 
 		assert.strictEqual(seen.length, 1);
 		assert.ok(!('authorization' in seen[0]));
+	});
+
+	test('concurrent state updates leave one complete, parseable file', async () => {
+		const statePath = join(workDir, 'state.json');
+		const state = new FileStateStore({ filePath: statePath });
+
+		await Promise.all(
+			Array.from({ length: 20 }, (_, index) => state.update(`k${index}`, index)),
+		);
+		// Its snapshot is taken after every concurrent update has mutated the
+		// cache, so this write is the one guaranteed to carry all twenty keys —
+		// and it can only be complete if no writer ever truncates the file
+		// another one is writing into.
+		await state.update('final', true);
+
+		const parsed = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
+		for (let index = 0; index < 20; index += 1) {
+			assert.strictEqual(parsed[`k${index}`], index, `k${index} survived`);
+		}
+		assert.strictEqual(parsed.final, true);
+		assert.deepStrictEqual(
+			(await readdir(workDir)).filter((entry) => entry.endsWith('.tmp')),
+			[],
+		);
+	});
+
+	test('a failed swap leaves the destination untouched and no temp behind', async () => {
+		const statePath = join(workDir, 'state.json');
+		// A directory cannot be replaced by a file, so the final `rename` fails
+		// after the temp has been written — the exact moment cleanup matters.
+		await mkdir(statePath, { recursive: true });
+		const state = new FileStateStore({ filePath: statePath });
+
+		await assert.rejects(() => state.update('k', 1), StorageError);
+
+		assert.strictEqual(
+			(await stat(statePath)).isDirectory(),
+			true,
+			'the destination is untouched',
+		);
+		assert.deepStrictEqual(
+			(await readdir(workDir)).filter((entry) => entry.endsWith('.tmp')),
+			[],
+			'the temp is cleaned up, not left on disk',
+		);
+	});
+
+	test('concurrent secret writes serialize into one valid file', async () => {
+		const secretsPath = join(workDir, 'secrets.json');
+		const secrets = new FileSecretStore({ filePath: secretsPath });
+		// Load the cache once, before racing: the test is about the writes.
+		await secrets.store('seed', 'first');
+
+		await Promise.all(
+			Array.from({ length: 5 }, (_, index) => secrets.store(`ref${index}`, `value${index}`)),
+		);
+
+		const parsed = JSON.parse(await readFile(secretsPath, 'utf8')) as Record<string, string>;
+		assert.strictEqual(Object.keys(parsed).length, 6, 'no write is lost');
+		assert.strictEqual(parsed.ref3, 'value3');
+		assert.deepStrictEqual(
+			(await readdir(workDir)).filter((entry) => entry.endsWith('.tmp')),
+			[],
+		);
 	});
 
 	test('the secrets file is created with owner-only permissions', async function () {

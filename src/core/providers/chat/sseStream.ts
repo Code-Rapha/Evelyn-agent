@@ -43,6 +43,10 @@ export class SseChatStream implements ChatStream {
 
 		this.iterator = source.call(this.body);
 		const decoder = new SseDecoder();
+		// One decoder for the whole stream: a character split across two chunks
+		// must carry its bytes over, or every ç/ã that lands on a boundary
+		// decodes to replacement characters — silently, mid-word.
+		const utf8 = new TextDecoder('utf-8');
 		// Tool call deltas accumulate: a name arrives once, then arguments in
 		// fragments, all under the same index.
 		const pendingToolCalls = new Map<number, { id?: string; name?: string; arguments: string }>();
@@ -56,6 +60,15 @@ export class SseChatStream implements ChatStream {
 
 				const next = await this.iterator.next();
 				if (next.done === true) {
+					// Bytes held back from a character the last chunk cut in
+					// half; `''` when the body ended on a boundary. Resolved
+					// before the decoder is drained so they join the block they
+					// belong to instead of vanishing — at most one character,
+					// and never a newline, so no event can start from them.
+					const tail = utf8.decode();
+					if (tail.length > 0) {
+						decoder.push(tail);
+					}
 					// A stream can end right after `[DONE]` with no trailing
 					// blank line, so the decoder gets one final chance.
 					for (const event of decoder.flush()) {
@@ -90,7 +103,7 @@ export class SseChatStream implements ChatStream {
 				const text =
 					typeof next.value === 'string'
 						? next.value
-						: new TextDecoder().decode(next.value as Uint8Array);
+						: utf8.decode(next.value as Uint8Array, { stream: true });
 
 				for (const event of decoder.push(text)) {
 					const events = this.toEvents(event, pendingToolCalls);
@@ -137,6 +150,13 @@ export class SseChatStream implements ChatStream {
 			return undefined;
 		}
 		if (event.data.trim() === SSE_DONE) {
+			// A server that already ended on `finish_reason` still sends the
+			// closing marker. Ending again here would put a second `Done` — and,
+			// until the pending map is drained below, a second copy of every tool
+			// call — in front of a consumer that is contractually promised one.
+			if (this.ended) {
+				return undefined;
+			}
 			this.ended = true;
 			return [...this.finalizeToolCalls(pendingToolCalls), { type: 'Done' } as const];
 		}
@@ -164,6 +184,11 @@ export class SseChatStream implements ChatStream {
 		}
 
 		const events: ChatStreamEvent[] = [];
+		// Reasoning first: a chunk carrying both is ordered thinking-then-answer by
+		// every server that sends both, so this keeps that order.
+		if (chunk.reasoning.length > 0) {
+			events.push({ type: 'ReasoningDelta', text: chunk.reasoning });
+		}
 		if (chunk.text.length > 0) {
 			events.push({ type: 'TextDelta', text: chunk.text });
 		}
@@ -177,6 +202,12 @@ export class SseChatStream implements ChatStream {
 		}
 		if (chunk.finishReason !== undefined) {
 			events.push(...this.finalizeToolCalls(pendingToolCalls));
+			// `finish_reason` *is* the end of the response, so it ends the
+			// stream. Without this the loop keeps reading for a `[DONE]` that
+			// most servers send anyway, and a body that simply closes would be
+			// finalised a second time in the flush path — the same call emitted
+			// twice, and a `Done` for each.
+			this.ended = true;
 			events.push({ type: 'Done', finishReason: chunk.finishReason });
 		}
 		return events;
@@ -190,7 +221,15 @@ export class SseChatStream implements ChatStream {
 		return this.signal?.aborted === true;
 	}
 
-	/** Emits any tool call that never received a terminal event. */
+	/**
+	 * Emits every accumulated tool call, then drains them.
+	 *
+	 * The drain is what makes this safe to call twice. A server may end the
+	 * response on `finish_reason` *and* send `[DONE]`, and the body may simply
+	 * close with no marker at all — three paths that all reach here. A second
+	 * pass over undrained entries would re-announce each call, and the runtime
+	 * would run it once per copy.
+	 */
 	private finalizeToolCalls(
 		pending: Map<number, { id?: string; name?: string; arguments: string }>,
 	): ChatStreamEvent[] {
@@ -208,6 +247,7 @@ export class SseChatStream implements ChatStream {
 				},
 			});
 		}
+		pending.clear();
 		return events;
 	}
 
@@ -266,6 +306,11 @@ export function buildChatRequestBody(request: {
 		readonly role: string;
 		readonly content: string;
 		readonly toolCallId?: string;
+		readonly toolCalls?: readonly {
+			readonly id: string;
+			readonly name: string;
+			readonly arguments: string;
+		}[];
 	}[];
 	readonly tools?: readonly {
 		readonly name: string;
@@ -280,6 +325,22 @@ export function buildChatRequestBody(request: {
 			role: message.role,
 			content: message.content,
 			...(message.toolCallId !== undefined ? { tool_call_id: message.toolCallId } : {}),
+			// The structured half of an assistant round-trip. Without it a
+			// `role:"tool"` message below has nothing to answer, and a strict
+			// server (api.openai.com among them) rejects the whole request with
+			// "messages with role 'tool' must be a response to a preceding
+			// message with 'tool_calls'". Only ever set on assistant messages,
+			// so a stray field cannot appear on a role that must not carry one.
+			...(message.role === 'assistant' &&
+			message.toolCalls !== undefined &&
+			message.toolCalls.length > 0
+				? {
+						tool_calls: message.toolCalls.map((call) => ({
+							type: 'function',
+							function: { name: call.name, arguments: call.arguments },
+						})),
+					}
+				: {}),
 		})),
 		// Streaming is the only mode this provider implements; asking for it is
 		// explicit so the wire format never silently disagrees with the caller.
