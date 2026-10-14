@@ -92,33 +92,23 @@
 				</div>
 
 				<!--
-					A reasoning model's thinking phase.
+					The thinking indicator.
 
-					Shown here, between the transcript and the composer, rather than
-					as a message bubble: it is not part of the answer and never
-					enters the transcript. It exists so the long silence before the
-					first visible token reads as the model working instead of the app
-					hanging.
+					One line, in the assistant's own voice, where its message
+					will be. Not a panel: this is a transient state rather than
+					content, so it appears with the reasoning and is gone the
+					moment the answer starts arriving. The reasoning itself is
+					not shown — nothing about it needs to outlive the pause it
+					explains.
 
-					`aria-live="polite"` on the messages list alone would not cover it:
-					the element is outside that subtree, so a screen reader would get
-					nothing while the model is thinking.
+					Its own `aria-live`, because the messages list has a
+					different one and is a different subtree: without this a
+					screen reader gets nothing at all during what is
+					functionally a long wait.
 				-->
-				<div id="thinking" class="thinking" hidden>
-					<span class="thinking-label">
-						<span class="thinking-dots" aria-hidden="true"></span>
-						Thinking
-					</span>
-					<p id="thinking-text" class="thinking-text" hidden></p>
-					<button
-						id="thinking-toggle"
-						type="button"
-						class="thinking-toggle"
-						aria-expanded="false"
-						aria-controls="thinking-text"
-					>
-						Show reasoning
-					</button>
+				<div id="thinking" class="thinking" hidden aria-live="polite">
+					<span class="thinking-dots" aria-hidden="true"></span>
+					<span class="thinking-label">thinking…</span>
 				</div>
 
 				<!--
@@ -218,6 +208,226 @@
 				window), and a set of invisible divs in the tab order would only be
 				noise.
 			-->
+			<aside
+			id="settings"
+			class="drawer"
+			aria-label="Settings"
+			role="dialog"
+			aria-modal="false"
+			hidden
+		>
+			<header class="drawer-head">
+				<h2>Settings</h2>
+				<button
+					id="settings-close"
+					type="button"
+					class="icon-button"
+					aria-label="Close settings"
+				>
+					&times;
+				</button>
+			</header>
+
+			<div class="drawer-body">
+				<!-- Column A. The two panels that are tall when open, so the
+				     height they take balances against the collapsed forms. -->
+				<div class="drawer-col drawer-col-a">
+					<section class="panel only-chat">
+					<details id="model-panel" open>
+						<summary>
+							<span class="summary-title">Model</span>
+							<span id="model-current" class="muted small"></span>
+						</summary>
+
+						<div class="panel-body">
+							<label class="block">
+								<span class="visually-hidden">Available models</span>
+								<select id="model-select" aria-label="Available models">
+									<option value="">no models loaded</option>
+								</select>
+							</label>
+
+							<div class="row">
+								<button id="model-refresh" type="button" class="secondary subtle">
+									Refresh
+								</button>
+							</div>
+
+							<p id="model-error" class="error" hidden></p>
+						</div>
+					</details>
+				</section>
+
+					<section class="panel growable">
+					<details id="conversation-panel" open>
+						<summary>
+							<span class="summary-title">Conversations</span>
+							<span id="conversation-meta" class="muted small"></span>
+						</summary>
+
+						<div class="panel-body">
+							<div class="row only-chat">
+								<button id="conversation-new" type="button" class="secondary subtle">
+									+ New
+								</button>
+							</div>
+
+							<ul id="conversation-list" class="conversations"></ul>
+
+							<p id="conversation-empty" class="muted small">
+								No conversations yet. Create one to start.
+							</p>
+
+							<p id="conversation-error" class="error" hidden></p>
+
+							<div class="row only-settings">
+								<input
+									id="conversation-title"
+									type="text"
+									placeholder="No conversation selected"
+									aria-label="Conversation title"
+									readonly
+								/>
+							</div>
+
+							<div class="row only-settings">
+								<button id="conversation-rename" type="button" class="secondary subtle" disabled>
+									Rename
+								</button>
+								<button id="conversation-delete" type="button" class="danger subtle" disabled>
+									Delete
+								</button>
+							</div>
+						</div>
+					</details>
+				</section>
+
+					<section class="panel growable only-settings">
+					<details id="system-panel" class="system" open>
+						<summary>
+							<span class="summary-title">System prompt</span>
+							<span class="muted small">this conversation</span>
+						</summary>
+
+						<div class="panel-body">
+							<textarea
+								id="system-prompt"
+								rows="5"
+								placeholder="Instructions sent before every message in this conversation"
+								aria-label="System prompt"
+								disabled
+							></textarea>
+							<div class="row end">
+								<button id="system-clear" type="button" class="secondary subtle" disabled>
+									Clear
+								</button>
+								<button id="system-save" type="button" class="subtle" disabled>Save prompt</button>
+							</div>
+							<p id="system-error" class="error" hidden></p>
+						</div>
+					</details>
+				</section>
+				</div>
+
+				<!-- Column B. One summary line each until opened. -->
+				<div class="drawer-col drawer-col-b">
+					<section class="panel only-settings">
+					<details id="provider-panel">
+						<summary>
+							<span class="summary-title">Provider</span>
+							<span id="provider-current" class="muted small"></span>
+						</summary>
+
+						<div class="panel-body">
+							<select id="provider-select" aria-label="Provider"></select>
+
+							<form id="provider-form" class="stack">
+								<label>
+									Base URL
+									<input
+										id="provider-base-url"
+										type="url"
+										placeholder="http://127.0.0.1:11434/v1"
+										autocomplete="off"
+										spellcheck="false"
+										required
+									/>
+								</label>
+
+								<label>
+									Name <span class="muted">(optional)</span>
+									<input id="provider-name" type="text" placeholder="Local model" autocomplete="off" />
+								</label>
+
+								<label>
+									API key <span class="muted">(optional)</span>
+									<input
+										id="provider-api-key"
+										type="password"
+										placeholder="leave blank to keep the stored key"
+										autocomplete="off"
+										spellcheck="false"
+									/>
+								</label>
+
+								<div class="row">
+									<button id="provider-save" type="submit">Save</button>
+									<button id="provider-models" type="button" class="secondary">Models</button>
+								</div>
+							</form>
+
+							<button id="provider-remove" type="button" class="danger subtle">
+								Remove provider
+							</button>
+
+							<p id="provider-error" class="error" hidden></p>
+						</div>
+					</details>
+				</section>
+
+					<section class="panel only-settings">
+					<details id="project-panel">
+						<summary>
+							<span class="summary-title">Project</span>
+							<span id="project-current" class="muted small"></span>
+						</summary>
+
+						<div class="panel-body">
+							<select id="project-select" aria-label="Project"></select>
+
+							<form id="project-form" class="stack">
+								<label>
+									Name <span class="muted">(optional)</span>
+									<input id="project-name" type="text" placeholder="My project" autocomplete="off" />
+								</label>
+
+								<label>
+									Folder
+									<input
+										id="project-root"
+										type="text"
+										placeholder="G:\ModelHub"
+										autocomplete="off"
+										spellcheck="false"
+										required
+									/>
+								</label>
+
+								<button id="project-save" type="submit">Add project</button>
+							</form>
+
+							<p id="project-error" class="error" hidden></p>
+						</div>
+					</details>
+				</section>
+				</div>
+			</div>
+
+			<footer class="drawer-foot">
+				<span id="data-directory" class="muted small"></span>
+			</footer>
+		</aside>
+
 			<div class="resize-handle resize-n" data-dir="n" aria-hidden="true"></div>
 			<div class="resize-handle resize-s" data-dir="s" aria-hidden="true"></div>
 			<div class="resize-handle resize-e" data-dir="e" aria-hidden="true"></div>
@@ -274,258 +484,7 @@
 			is already at `translateX(0)`, so the first hover is a no-op and the
 			menu appears to have no animation at all.
 		-->
-		<aside
-			id="settings"
-			class="drawer"
-			aria-label="Settings"
-			role="dialog"
-			aria-modal="false"
-			hidden
-		>
-			<header class="drawer-head">
-				<h2>Settings</h2>
-				<button
-					id="settings-close"
-					type="button"
-					class="icon-button"
-					aria-label="Close settings"
-				>
-					&times;
-				</button>
-			</header>
-
-			<div class="drawer-body">
-				<!--
-					Every panel lives here, in one copy, and the two windows show
-					different subsets of them.
-
-					Both windows load this same file, and the renderer looks every
-					id up by name at startup — so a panel that existed in only one
-					layout would make `byId` throw on startup in the other. Two
-					markups would also drift. Which panels are *shown* is therefore
-					a styling question, answered by `data-window` on `<body>`, not a
-					second copy of the document.
-				-->
-
-				<!--
-					Models: chat window only.
-
-					Cross-provider by design — every enabled provider's models in one
-					list, each labelled with the provider serving it. Choosing a model
-					chooses its provider, and the conversation list follows.
-
-					Refreshing is a button rather than a side effect because the list
-					costs one request per provider, and asking on every render would
-					hammer a local model server for no reason.
-				-->
-				<section class="panel only-chat">
-					<details id="model-panel" open>
-						<summary>
-							<span class="summary-title">Model</span>
-							<span id="model-current" class="muted small"></span>
-						</summary>
-
-						<div class="panel-body">
-							<label class="block">
-								<span class="visually-hidden">Available models</span>
-								<select id="model-select" aria-label="Available models">
-									<option value="">no models loaded</option>
-								</select>
-							</label>
-
-							<div class="row">
-								<button id="model-refresh" type="button" class="secondary subtle">
-									Refresh
-								</button>
-							</div>
-
-							<p id="model-error" class="error" hidden></p>
-						</div>
-					</details>
-				</section>
-
-				<!--
-					Conversations: both windows.
-
-					Settings has them too because the system prompt belongs to a
-					conversation, so the window that edits it needs to be able to say
-					which conversation.
-				-->
-				<section class="panel">
-					<details id="conversation-panel" open>
-						<summary>
-							<span class="summary-title">Conversations</span>
-							<span id="conversation-meta" class="muted small"></span>
-						</summary>
-
-						<div class="panel-body">
-							<div class="row only-chat">
-								<button id="conversation-new" type="button" class="secondary subtle">
-									+ New
-								</button>
-							</div>
-
-							<ul id="conversation-list" class="conversations"></ul>
-
-							<p id="conversation-empty" class="muted small">
-								No conversations yet. Create one to start.
-							</p>
-
-							<p id="conversation-error" class="error" hidden></p>
-
-							<div class="row only-settings">
-								<input
-									id="conversation-title"
-									type="text"
-									placeholder="No conversation selected"
-									aria-label="Conversation title"
-									readonly
-								/>
-							</div>
-
-							<div class="row only-settings">
-								<button id="conversation-rename" type="button" class="secondary subtle" disabled>
-									Rename
-								</button>
-								<button id="conversation-delete" type="button" class="danger subtle" disabled>
-									Delete
-								</button>
-							</div>
-						</div>
-					</details>
-				</section>
-
-				<!-- Provider: settings window only. -->
-				<section class="panel only-settings">
-					<details id="provider-panel">
-						<summary>
-							<span class="summary-title">Provider</span>
-							<span id="provider-current" class="muted small"></span>
-						</summary>
-
-						<div class="panel-body">
-							<select id="provider-select" aria-label="Provider"></select>
-
-							<form id="provider-form" class="stack">
-								<label>
-									Base URL
-									<input
-										id="provider-base-url"
-										type="url"
-										placeholder="http://127.0.0.1:11434/v1"
-										autocomplete="off"
-										spellcheck="false"
-										required
-									/>
-								</label>
-
-								<label>
-									Name <span class="muted">(optional)</span>
-									<input id="provider-name" type="text" placeholder="Local model" autocomplete="off" />
-								</label>
-
-								<label>
-									API key <span class="muted">(optional)</span>
-									<input
-										id="provider-api-key"
-										type="password"
-										placeholder="leave blank to keep the stored key"
-										autocomplete="off"
-										spellcheck="false"
-									/>
-								</label>
-
-								<div class="row">
-									<button id="provider-save" type="submit">Save</button>
-									<button id="provider-models" type="button" class="secondary">Models</button>
-								</div>
-							</form>
-
-							<button id="provider-remove" type="button" class="danger subtle">
-								Remove provider
-							</button>
-
-							<p id="provider-error" class="error" hidden></p>
-						</div>
-					</details>
-				</section>
-
-				<!-- Projects: settings window only. A project is the directory the
-				     tools may work in, which gives a conversation its workspace. -->
-				<section class="panel only-settings">
-					<details id="project-panel">
-						<summary>
-							<span class="summary-title">Project</span>
-							<span id="project-current" class="muted small"></span>
-						</summary>
-
-						<div class="panel-body">
-							<select id="project-select" aria-label="Project"></select>
-
-							<form id="project-form" class="stack">
-								<label>
-									Name <span class="muted">(optional)</span>
-									<input id="project-name" type="text" placeholder="My project" autocomplete="off" />
-								</label>
-
-								<label>
-									Folder
-									<input
-										id="project-root"
-										type="text"
-										placeholder="G:\ModelHub"
-										autocomplete="off"
-										spellcheck="false"
-										required
-									/>
-								</label>
-
-								<button id="project-save" type="submit">Add project</button>
-							</form>
-
-							<p id="project-error" class="error" hidden></p>
-						</div>
-					</details>
-				</section>
-
-				<!--
-					System prompt: settings window only.
-
-					Per conversation, not per app — which is why it sits next to the
-					conversation it applies to rather than in a preferences area of
-					its own.
-				-->
-				<section class="panel only-settings">
-					<details id="system-panel" class="system" open>
-						<summary>
-							<span class="summary-title">System prompt</span>
-							<span class="muted small">this conversation</span>
-						</summary>
-
-						<div class="panel-body">
-							<textarea
-								id="system-prompt"
-								rows="5"
-								placeholder="Instructions sent before every message in this conversation"
-								aria-label="System prompt"
-								disabled
-							></textarea>
-							<div class="row end">
-								<button id="system-clear" type="button" class="secondary subtle" disabled>
-									Clear
-								</button>
-								<button id="system-save" type="button" class="subtle" disabled>Save prompt</button>
-							</div>
-							<p id="system-error" class="error" hidden></p>
-						</div>
-					</details>
-				</section>
-			</div>
-
-			<footer class="drawer-foot">
-				<span id="data-directory" class="muted small"></span>
-			</footer>
-		</aside>
+		
 
 		<script src="./index.js"></script>
 	</body>

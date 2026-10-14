@@ -316,8 +316,19 @@ body {
 }
 
 .app {
-	display: grid;
-	grid-template-rows: auto auto 1fr;
+	/*
+	 * A flex column, not a grid with `grid-template-rows: auto auto 1fr`.
+	 *
+	 * Three rows assumes three children — but `#core-error` is `display: none`
+	 * while it is hidden, and a `display: none` element is not a grid item. So
+	 * `.chat` landed in the *second* `auto` row instead of the `1fr`, sized to
+	 * its content: 460px of chat inside a 1040px window, with the composer cut
+	 * off and the rest of the window empty. A row count that silently changes
+	 * with a hidden sibling is the whole hazard; a flex column has no such
+	 * dependency.
+	 */
+	display: flex;
+	flex-direction: column;
 	/* Inside `.frame`, so the titlebar's 36px is above it rather than beside
 	   it — and `min-height: 0` is what lets `.messages` scroll rather than
 	   pushing the composer out of the window. */
@@ -468,11 +479,111 @@ body[data-window='settings'] .drawer-head h2 {
 	color: var(--text);
 }
 
-/* Only one of the two panel sets is ever on screen in a given window. */
-.only-chat {
-	display: none;
+/*
+ * Settings panels keep their natural height.
+ *
+ * An earlier version let the conversation list and the prompt textarea grow to
+ * fill the window, which was an attempt to stop the column leaving dead space
+ * at the bottom. It made the window worse: the panels were flex items in a
+ * scrolling column, so `flex: 1 1 0` plus `min-height: 0` let them shrink below
+ * their own content instead of letting the column scroll — the panels collapsed
+ * and their controls became unreachable. Content that cannot be scrolled to is
+ * worse than content with space under it, so the natural height stays.
+ */
+
+/* ── drawer columns ──────────────────────────────────────────────────────── */
+
+/*
+ * A stack in the chat window, two columns in the settings one.
+ *
+ * The chat drawer is 340px wide, so its two columns would be 170px each — far
+ * too narrow for a form. It keeps the flex column instead, and because its
+ * panels live in different wrappers the wrappers simply stack, which is what
+ * that window wants anyway.
+ *
+ * The settings window maximises, so it has the width to spend on two columns
+ * and needs the height back: four panels stacked are taller than any screen,
+ * which is why one of them was always below the fold.
+ */
+.drawer-col {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	min-width: 0;
 }
 
+body[data-window='settings'] .drawer-body {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	/*
+	 * No `align-content: start`. The grid's single row would otherwise be sized
+	 * to its content and the columns would sit in the top 488px of an 895px
+	 * body, leaving the rest of a maximised window empty — which is the same
+	 * dead space this layout exists to remove, moved from "below the panels" to
+	 * "below the columns".
+	 */
+	gap: 16px;
+	/*
+	 * Still a scroll container. Two columns fit on a maximised window, but a
+	 * short screen or a large system font can still push the second row past the
+	 * bottom, and this must not become the thing that hides content again.
+	 */
+	overflow-y: auto;
+}
+
+/*
+ * The panels with something to show share the leftover height.
+ *
+ * `flex: 1 1 auto`, and deliberately *without* `min-height: 0`. An earlier
+ * version used `flex: 1 1 0` with `min-height: 0` to do this, which let the
+ * panels shrink below their own content instead of letting the column scroll —
+ * the controls vanished and the window became unusable. `basis: auto` starts
+ * each panel at its content size and `min-height: auto` (the default for a
+ * flex item) then stops it shrinking past that, so growth is all that happens
+ * here.
+ *
+ * The collapsed forms in column B keep their natural height: stretching a
+ * one-line summary to fill half a window is the dead space again, only taller.
+ */
+body[data-window='settings'] .growable {
+	flex: 1 1 auto;
+}
+
+body[data-window='settings'] .growable > details {
+	display: flex;
+	flex-direction: column;
+}
+
+body[data-window='settings'] .growable > details > .panel-body {
+	display: flex;
+	flex-direction: column;
+}
+
+body[data-window='settings'] .growable .conversations {
+	flex: 1;
+}
+
+body[data-window='settings'] #system-prompt {
+	flex: 1;
+	min-height: 140px;
+	resize: none;
+}
+
+body[data-window='settings'] .drawer-col {
+	overflow: visible;
+}
+
+/*
+ * Which panel set belongs to which window.
+ *
+ * Every rule here is scoped to a `data-window` value. An unqualified
+ * `.only-chat { display: none }` reads as the obvious way to write it and is
+ * wrong: it hides the model panel in *both* windows, including the chat one
+ * where it is the only way to pick a model.
+ *
+ * `:not([data-window])` covers the page opened outside the desktop app, where
+ * there is no role to read — chat is the sane default there.
+ */
 body[data-window='settings'] .only-chat {
 	display: none;
 }
@@ -1092,6 +1203,9 @@ button.subtle {
 	display: flex;
 	flex-direction: column;
 	min-width: 0;
+	/* Fills `.app` below the topbar. `min-height: 0` so `.messages` inside it
+	   can scroll instead of pushing the composer past the bottom. */
+	flex: 1;
 	min-height: 0;
 }
 
@@ -1139,49 +1253,41 @@ button.subtle {
 }
 
 /*
- * The thinking phase of a reasoning model.
+ * The thinking indicator.
  *
- * Deliberately quieter than a message bubble and collapsible: it is diagnostic,
- * not content. The default shows only the label, because the reasoning is long
- * and reading it while the answer streams past would be the wrong priority.
+ * Aligned with the assistant's messages rather than with the composer: it
+ * replaces the answer for a moment, so it belongs where the answer would be.
+ * The left padding matches `.message .role`, so it reads as the same speaker
+ * rather than as a bar belonging to the window.
  *
- * `aria-live` is on the container, not the text: the text node is rewritten on
- * every delta, and a live region over a node that changes that often floods a
- * screen reader with partial words.
+ * Deliberately not a panel. It has no border, no background and no body — it is
+ * a state that lasts as long as the pause before the first token, and anything
+ * more permanent would be claiming a certainty the UI does not have.
  */
 .thinking {
 	display: flex;
-	flex-direction: column;
-	gap: 6px;
-	/* Aligned with the composer's inset, so the two read as one column rather
-	   than as a full-width strip and a narrower bar. */
-	margin: 8px 28px 0;
-	padding: 10px 14px;
-	border: 1px dashed var(--border);
-	border-radius: var(--radius);
-	background: color-mix(in srgb, var(--surface) 60%, transparent);
-}
-
-.thinking-label {
-	display: inline-flex;
 	align-items: center;
 	gap: 8px;
-	font-size: 11px;
-	font-weight: 600;
-	letter-spacing: 0.06em;
-	text-transform: uppercase;
+	flex: none;
+	padding: 6px 28px;
 	color: var(--muted);
+	font-size: 13px;
+}
+
+/*
+ * `hidden` has to win over the `display: flex` above. The attribute is how the
+ * renderer shows and hides this, and an author `display` beats the browser's own
+ * rule for it — without this the line is never hidden at all, and the indicator
+ * sits there permanently, including long after the answer has arrived.
+ */
+.thinking[hidden] {
+	display: none;
 }
 
 /* Three dots that cycle, drawn with one pseudo-element per dot. */
 .thinking-dots {
 	display: inline-flex;
 	gap: 3px;
-}
-
-.thinking-dots::before,
-.thinking-dots::after,
-.thinking-dots {
 	color: var(--accent);
 }
 
@@ -1207,8 +1313,8 @@ button.subtle {
 }
 
 /*
- * Honoured as a system preference, and also switched off here: the block is
- * hidden until asked for, so the animation is a cost with no reader.
+ * Honoured as a system preference, and also switched off here: the dots are
+ * hidden by default and the animation is a cost with no reader.
  */
 @media (prefers-reduced-motion: reduce) {
 	.thinking-dots::before,
@@ -1216,37 +1322,6 @@ button.subtle {
 		animation: none;
 		opacity: 0.6;
 	}
-}
-
-.thinking-text {
-	margin: 0;
-	max-height: 11em;
-	overflow-y: auto;
-	white-space: pre-wrap;
-	word-break: break-word;
-	font-size: 12.5px;
-	color: var(--muted);
-}
-
-/* Only present once there is something to read. */
-.thinking-text:empty {
-	display: none;
-}
-
-.thinking-toggle {
-	align-self: flex-start;
-	padding: 0;
-	border: 0;
-	background: none;
-	color: var(--muted);
-	font: inherit;
-	font-size: 12px;
-	text-decoration: underline;
-	cursor: pointer;
-}
-
-.thinking-toggle:hover {
-	color: var(--text);
 }
 
 .message {

@@ -415,7 +415,7 @@ function renderMessages(): void {
 							? `Tool failed · ${message.toolName ?? 'result'}`
 							: message.role === 'error'
 								? 'Error'
-								: 'Model';
+								: 'Assistant';
 
 		const bubble = document.createElement('div');
 		bubble.className = 'bubble';
@@ -477,30 +477,24 @@ function sendBlockedReason(): string | null {
 }
 
 /**
- * The thinking phase of a reasoning model.
+ * The thinking indicator.
  *
- * Only shown while a turn is running *and* something has arrived to show: a
- * panel that appears on `started` and sits empty for a non-reasoning model
- * would be noise on every turn.
+ * Shown only while the model is reasoning and has *not* started answering. Once
+ * the first text delta creates the assistant's message, the indicator is gone:
+ * the streaming caret in that bubble already says the answer is arriving, and a
+ * "thinking" line next to a half-written answer would claim the opposite.
  *
- * `expanded` is local to this function's caller rather than the state, because
- * the text is rewritten on every delta and re-creating the node each time would
- * collapse a panel the user had opened.
+ * `state.reasoning` is still accumulated by the events but nothing renders it
+ * now — it is the signal that the model is thinking at all, and on a reasoning
+ * model there is a long pause before any other event arrives.
  */
 function renderThinking(): void {
 	const panel = byId<HTMLElement>('thinking');
-	const active = state.activeTurnId !== undefined && state.reasoning.length > 0;
-	setHidden(panel, !active);
-	if (!active) {
-		return;
-	}
-	const text = byId<HTMLElement>('thinking-text');
-	text.textContent = state.reasoning;
-	const expanded = text.hidden === false;
-	setHidden(text, !expanded);
-	const toggle = byId<HTMLButtonElement>('thinking-toggle');
-	toggle.textContent = expanded ? 'Hide reasoning' : 'Show reasoning';
-	toggle.setAttribute('aria-expanded', String(expanded));
+	const busy = isBusy();
+	const last = state.messages[state.messages.length - 1];
+	const answering = last !== undefined && last.role === 'assistant';
+
+	setHidden(panel, !(busy && state.reasoning.length > 0 && !answering));
 }
 
 function renderSystemPrompt(prompt: string): void {
@@ -1269,15 +1263,6 @@ function bindEvents(bridge: SeshyinaBridge): void {
 	});
 
 	byId<HTMLButtonElement>('send').addEventListener('click', () => void send());
-
-	// Flips the text node's `hidden` first and then re-renders: `renderThinking`
-	// reads that flag back as the expanded state, so the choice survives the
-	// re-renders that each streaming delta triggers.
-	byId<HTMLButtonElement>('thinking-toggle').addEventListener('click', () => {
-		const text = byId<HTMLElement>('thinking-text');
-		text.hidden = !text.hidden;
-		renderThinking();
-	});
 	byId<HTMLButtonElement>('stop').addEventListener('click', () => void stop());
 
 	// The answers. Bound once, here: the card is never rebuilt — only
