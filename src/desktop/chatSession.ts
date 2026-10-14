@@ -278,17 +278,23 @@ export class ChatSession {
 	}
 
 	/**
-	 * Conversations for a provider, most recently active first.
+	 * Every conversation, most recently active first.
+	 *
+	 * Not filtered by provider. It used to be, on the assumption that a
+	 * conversation is bound to one provider — but a turn names its own provider
+	 * (`sendMessage` takes one), so a conversation is a transcript and a provider
+	 * is a per-turn choice. Filtering by it made switching models swap the
+	 * conversation list, which read as the app throwing the conversation away.
+	 *
+	 * A conversation still records the provider it was created with, which is
+	 * where it came from — not a constraint on what may continue it.
 	 *
 	 * Sorted here rather than leaving the order to the caller, because a
 	 * conversation list whose order depends on directory iteration is a list the
 	 * user cannot predict.
 	 */
-	async listConversations(providerId: string): Promise<readonly ConversationListItem[]> {
-		// Filtered by provider, not project: a conversation is bound to exactly
-		// one provider and to at most one project, and conflating the two is what
-		// made an unbound conversation invisible in its own sidebar.
-		const summaries = await this.history.listConversations({ providerId });
+	async listConversations(): Promise<readonly ConversationListItem[]> {
+		const summaries = await this.history.listConversations();
 		// Read in full rather than reusing the list entry: the list view does not
 		// expose the transcript, and the sidebar's message count has to match what
 		// opening the conversation would show.
@@ -471,16 +477,29 @@ export class ChatSession {
 				throw new Error(`No conversation with id "${input.conversationId}" exists`);
 			}
 
-			// A conversation belongs to the provider it was created under.
-			// Answering it from another one would mix transcripts across
-			// endpoints — different keys, different models, one transcript.
+			// The provider a conversation was *created* with is a record of where it
+			// started, not a claim on it.
+			//
+			// This used to refuse a send through any other provider, to avoid
+			// "mixing transcripts across endpoints". That is what trying the same
+			// conversation on a second model looks like from the user's side: the
+			// conversation vanishes from the list and a new empty one opens, and
+			// the app cannot be used to compare two models on one thread at all.
+			//
+			// The transcript is a list of plain messages and replays against any
+			// OpenAI-compatible endpoint. The one thing worth watching is tool
+			// history: a `tool_calls` message naming a tool the new endpoint was
+			// never offered would be rejected by that server, which surfaces as a
+			// visible error on the turn rather than as a silent mix.
 			if (
 				conversation.providerId !== undefined &&
 				conversation.providerId !== input.providerId
 			) {
-				throw new Error(
-					`Conversation "${input.conversationId}" belongs to provider "${conversation.providerId}", not "${input.providerId}"`,
-				);
+				this.logger.info('Continuing a conversation under another provider', {
+					conversationId: conversation.id,
+					createdWith: conversation.providerId,
+					answeringWith: input.providerId,
+				});
 			}
 
 			const provider = this.resolveProvider(input.providerId);

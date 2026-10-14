@@ -416,21 +416,51 @@ body {
 /* ── settings navigation ─────────────────────────────────────────────────── */
 
 /*
- * The section list inside the settings window.
+/*
+ * The settings window: the section list down the left, the section's panels
+ * filling the rest.
  *
- * A sidebar of its own rather than the app's: the sections are settings-only,
- * and reusing the edge drawer for them would make one control mean two different
- * things in two windows.
+ * It was a horizontal row of buttons under the header first, which is a tab bar
+ * and not a sidebar. A column is also the shape that can grow — headings,
+ * nesting and a footer all fit in one, and a row has nowhere to put them.
  *
- * It is a list of buttons rather than links because switching section never
- * navigates — the document is the same either way.
+ * Buttons rather than links: switching section never navigates, the document is
+ * the same either way.
  */
 .settings-nav {
 	display: none;
 	flex-direction: column;
 	gap: 2px;
 	padding: 12px;
-	border-bottom: 1px solid var(--border);
+}
+
+body[data-window='settings'] .drawer {
+	display: grid;
+	grid-template-columns: 210px minmax(0, 1fr);
+	grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+/*
+ * The header spans both columns: it titles the window rather than one column of
+ * it. Same for the footer, which reports the data directory for the whole app.
+ */
+body[data-window='settings'] .drawer-head,
+body[data-window='settings'] .drawer-foot {
+	grid-column: 1 / -1;
+}
+
+body[data-window='settings'] .settings-nav {
+	grid-column: 1;
+	grid-row: 2;
+	/* A divider down the side rather than under it, because the list now runs
+	   beside the content instead of above it. */
+	border-right: 1px solid var(--border);
+	overflow-y: auto;
+}
+
+body[data-window='settings'] .drawer-body {
+	grid-column: 2;
+	grid-row: 2;
 }
 
 body[data-window='settings'] .settings-nav {
@@ -526,7 +556,14 @@ body[data-window='settings'] .drawer {
  * be this specific or it loses to nothing and wins over nothing.
  */
 body[data-window='settings'] .drawer[hidden] {
-	display: flex;
+	/*
+	 * `grid`, not `flex`, and not because the drawer is a grid for style: this
+	 * selector is more specific than the rule above it, so it is the one that
+	 * actually decides `display`. Left as `flex` it silently overrode the grid
+	 * and laid the section list out as a full-width row again — which is exactly
+	 * what it looked like before, and equally not a sidebar.
+	 */
+	display: grid;
 	opacity: 1;
 	transform: none;
 	visibility: visible;

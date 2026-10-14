@@ -99,6 +99,14 @@ interface State {
 	/** Whether a project has been chosen, so the panel folds only on the change. */
 	hadProject: boolean;
 	/**
+	 * The provider form describes a new provider rather than the selected one.
+	 *
+	 * Its own flag rather than a derived value: the form has to be able to sit
+	 * blank while a provider is still selected, which is exactly the state that
+	 * made "Add provider" look broken.
+	 */
+	providerDraft: boolean;
+	/**
 	 * The reasoning text of the turn in flight.
 	 *
 	 * Separate from `messages` because it is never part of the transcript: a
@@ -123,6 +131,7 @@ const state: State = {
 	openPermission: undefined,
 	hadProvider: false,
 	hadProject: false,
+	providerDraft: false,
 	reasoning: '',
 };
 
@@ -201,22 +210,34 @@ function renderProviderList(): void {
 function renderProviderForm(): void {
 	const provider = currentProvider();
 	const key = byId<HTMLInputElement>('provider-api-key');
+	const drafting = state.providerDraft;
 
-	byId<HTMLInputElement>('provider-base-url').value = provider?.baseUrl ?? '';
-	byId<HTMLInputElement>('provider-name').value = provider?.name ?? '';
+	// A draft is blank. Filling it from the selected provider is what made "Add
+	// provider" look like it did nothing: the panel opened with the *existing*
+	// provider's URL and name still in the fields, so there was nothing to type
+	// over and nothing said a new one was being described.
+	byId<HTMLInputElement>('provider-base-url').value = drafting ? '' : (provider?.baseUrl ?? '');
+	byId<HTMLInputElement>('provider-name').value = drafting ? '' : (provider?.name ?? '');
 	// Never pre-filled: the renderer cannot read a key, and a masked placeholder
 	// that looks like one would suggest it can.
 	key.value = '';
-	key.placeholder = provider?.hasApiKeyRef
-		? 'a key is stored — blank keeps it'
-		: 'no key stored yet';
+	key.placeholder = drafting
+		? 'not stored yet'
+		: provider?.hasApiKeyRef
+			? 'a key is stored — blank keeps it'
+			: 'no key stored yet';
 
 	// Locked while a turn streams, for the same reason as the select: saving
 	// or removing the provider under a running turn would swap the endpoint
-	// its events are arriving from.
+	// its events are arriving from. Nothing to remove while drafting a new one.
 	byId<HTMLButtonElement>('provider-remove').disabled =
-		provider === undefined || isBusy();
+		drafting || provider === undefined || isBusy();
 	byId<HTMLButtonElement>('provider-save').disabled = isBusy();
+	// Only offered while drafting: outside a draft it would discard the selected
+	// provider's form for no reason, since the select already switches between
+	// them.
+	byId<HTMLButtonElement>('provider-cancel').hidden = !drafting;
+	byId<HTMLButtonElement>('provider-add').disabled = drafting || isBusy();
 
 	// The collapsed summary has to name the provider, or a collapsed panel would
 	// hide which one is in use.
@@ -580,7 +601,7 @@ async function refreshConversations(): Promise<void> {
 		return;
 	}
 	try {
-		state.conversations = await bridge.listConversations(state.selectedProviderId);
+		state.conversations = await bridge.listConversations();
 		clearError(byId('conversation-error'));
 	} catch (error) {
 		state.conversations = [];
@@ -631,6 +652,9 @@ async function saveProvider(event: Event): Promise<void> {
 			state.selectedModel = '';
 		}
 		state.selectedProviderId = saved.id;
+		// The draft described a provider that now exists, so the form belongs to
+		// the saved one again.
+		state.providerDraft = false;
 		await refreshProviders();
 		// Fetch the model list here instead of waiting for a click on `Models`.
 		// Nothing else repopulates it, and Send is disabled while `selectedModel`
@@ -727,6 +751,7 @@ async function removeProvider(): Promise<void> {
 		await bridge.removeProvider(provider.id);
 		state.selectedProviderId = '';
 		state.selectedModel = '';
+		state.providerDraft = false;
 		state.conversations = [];
 		state.selectedConversationId = '';
 		state.messages = [];
@@ -1233,15 +1258,24 @@ function bindEvents(bridge: SeshyinaBridge): void {
 	byId<HTMLButtonElement>('provider-models').addEventListener('click', () => void loadModels());
 	byId<HTMLButtonElement>('model-refresh').addEventListener('click', () => void loadModels());
 
-	// Opens the provider form and puts the cursor in the first field.
+	// Starts describing a new provider.
 	//
-	// The form is a real destination rather than something this button
-	// duplicates: the base URL is what a new provider needs first, and the name
-	// and key are optional. Focusing it saves the user finding the panel at all.
+	// Unfolds the panel, blanks the form and focuses the base URL. The blanking
+	// is the whole point: the form is refilled from the selected provider on
+	// every render, so without the draft flag it reopened showing the existing
+	// provider's URL and name and there was nothing to overwrite.
 	byId<HTMLButtonElement>('provider-add').addEventListener('click', () => {
+		state.providerDraft = true;
 		const panel = byId<HTMLDetailsElement>('provider-panel');
 		panel.open = true;
+		render();
 		byId<HTMLInputElement>('provider-base-url').focus();
+	});
+
+	// Abandons the draft and goes back to the selected provider's own form.
+	byId<HTMLButtonElement>('provider-cancel').addEventListener('click', () => {
+		state.providerDraft = false;
+		render();
 	});
 	byId<HTMLButtonElement>('provider-remove').addEventListener('click', () => void removeProvider());
 
@@ -1311,26 +1345,17 @@ function bindEvents(bridge: SeshyinaBridge): void {
 			return;
 		}
 		state.selectedProviderId = (event.target as HTMLSelectElement).value;
-		// The model list is global and is not rebuilt here; only the selection is
-		// dropped, because it named the provider the user just left.
+		// Switching provider abandons a draft: the form was describing a new one,
+		// and it now describes whichever was picked.
+		state.providerDraft = false;
+		// The conversation stays open, for the same reason the model picker does
+		// not clear it: a conversation is a transcript and the provider is a
+		// per-turn choice. Only the model selection is dropped, because it named
+		// a provider that is no longer the selected one.
 		state.selectedModel = '';
-		// Conversations belong to a provider; carrying them over would show a
-		// transcript the new provider never saw.
-		state.conversations = [];
-		state.selectedConversationId = '';
-		state.messages = [];
 		clearError(byId('provider-error'));
-		void (async () => {
-			// Same reason as after a save: an empty `selectedModel` disables Send,
-			// and switching provider is exactly when it empties.
-			await refreshConversations();
-			const first = state.conversations[0];
-			if (first !== undefined) {
-				await openConversation(first.id);
-			} else {
-				render();
-			}
-		})();
+		render();
+		void loadModels();
 	});
 
 	byId<HTMLSelectElement>('model-select').addEventListener('change', (event) => {
@@ -1346,25 +1371,17 @@ function bindEvents(bridge: SeshyinaBridge): void {
 		}
 		state.selectedModel = entry.model;
 
-		// A model from a different provider moves the conversation list with it.
-		// Conversations are bound to one provider, so leaving the list on the old
-		// provider would show a transcript the chosen endpoint has never seen.
-		if (entry.providerId !== state.selectedProviderId) {
-			state.selectedProviderId = entry.providerId;
-			state.conversations = [];
-			state.selectedConversationId = '';
-			state.messages = [];
-			void (async () => {
-				await refreshConversations();
-				const first = state.conversations[0];
-				if (first !== undefined) {
-					await openConversation(first.id);
-				} else {
-					render();
-				}
-			})();
-			return;
-		}
+		// The provider follows the model, because `sendMessage` names the
+		// provider per turn and the selected one has to be the one that serves
+		// the selected model.
+		state.selectedProviderId = entry.providerId;
+
+		// Nothing else changes. The conversation stays open and the transcript
+		// stays on screen: it used to be cleared and reopened here, on the
+		// grounds that a conversation belongs to one provider, and that read as
+		// the app discarding the conversation whenever the model changed. A
+		// conversation is a transcript and the provider is a per-turn choice, so
+		// carrying on with a different provider's model is the normal case.
 		render();
 	});
 

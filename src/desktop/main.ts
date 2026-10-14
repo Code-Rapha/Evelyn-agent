@@ -311,7 +311,10 @@ function registerIpc(): void {
 			case 'create':
 				return core.chat.createConversation(parseCreateConversationInput(payload));
 			case 'list':
-				return core.chat.listConversations(parseProviderId(payload));
+				// No provider filter: a conversation is a transcript, and the
+				// provider is chosen per turn. Filtering here is what made
+				// switching models swap the conversation list.
+				return core.chat.listConversations();
 			case 'open':
 				return core.chat.openConversation(parseConversationId(payload));
 			case 'rename':

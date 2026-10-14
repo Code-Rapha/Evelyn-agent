@@ -189,14 +189,10 @@ const bridge: SeshyinaBridge = Object.freeze({
 		}
 	},
 
-	async listConversations(providerId: string) {
+	async listConversations() {
 		try {
 			return parseConversationListItems(
-				await ipcRenderer.invoke(
-					CONVERSATION_CHANNEL,
-					'list',
-					parseProviderId(providerId),
-				),
+				await ipcRenderer.invoke(CONVERSATION_CHANNEL, 'list'),
 			);
 		} catch (error) {
 			rethrow(error);

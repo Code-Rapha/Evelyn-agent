@@ -389,7 +389,14 @@ export interface SeshyinaBridge {
 	 */
 	createConversation(input: CreateConversationInput): Promise<ConversationView>;
 	/** Conversations for a provider, newest activity first. */
-	listConversations(providerId: string): Promise<readonly ConversationListItem[]>;
+	/**
+	 * Every conversation, most recently active first.
+	 *
+	 * Not scoped to a provider: `sendMessage` names its own provider per turn,
+	 * so a conversation can be continued with any provider's model. Scoping the
+	 * list to one made changing model appear to lose the conversation.
+	 */
+	listConversations(): Promise<readonly ConversationListItem[]>;
 	/** One conversation with its transcript. Rejects when the id is unknown. */
 	openConversation(conversationId: string): Promise<ConversationView>;
 	renameConversation(conversationId: string, title: string): Promise<ConversationListItem>;

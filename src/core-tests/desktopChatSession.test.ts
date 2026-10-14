@@ -30,6 +30,8 @@ import { parseProviderSummary, type SendMessageInput } from '../desktop/contract
 const KEY = 'sk-test-DO-NOT-PERSIST-9c1e2b';
 const LOCAL_URL = 'http://127.0.0.1:11434/v1';
 const LOCAL_ID = '127.0.0.1-11434-v1';
+/** A second endpoint, for the tests about more than one provider. */
+const SECOND_URL = 'http://127.0.0.1:11435/v1';
 
 /** Wraps SSE text as the byte chunks the provider's decoder consumes. */
 function sseResponse(chunks: readonly string[]): FetchResponseLike {
@@ -628,19 +630,27 @@ suite('Desktop: chat session', () => {
 		assert.strictEqual(chat.isBusy, false, 'and the session is free again afterwards');
 	});
 
-	test('a conversation cannot be answered through a different provider', async () => {
-		const { fetchImpl } = scriptedFetch([delta('never sent'), DONE]);
+	test('a conversation continues through a different provider', async () => {
+		// This used to be refused outright, on the grounds that answering a
+		// conversation from another endpoint "mixes transcripts". From the user's
+		// side that was the same thing as not being able to try a second model on
+		// an existing thread: the conversation disappeared from the list and an
+		// empty one took its place.
+		const { fetchImpl } = scriptedFetch([delta('from the second provider'), DONE]);
 		const chat = await readySession(fetchImpl);
 		const input = await sendInput(chat);
+
+		// A second endpoint, configured exactly as a user would add one.
+		await chat.saveProvider({ baseUrl: SECOND_URL, name: 'Second' });
+		const second = chat.listProviders().find((p) => p.baseUrl === SECOND_URL);
+		assert.ok(second, 'the second provider is configured');
+
 		const log = new EventLog();
+		await chat.sendMessage({ ...input, providerId: second.id }, log.sink);
+		await log.wait();
 
-		await assert.rejects(
-			() => chat.sendMessage({ ...input, providerId: 'another-endpoint' }, log.sink),
-			/belongs to provider/,
-		);
-
-		assert.strictEqual(chat.isBusy, false, 'the refused send must not reserve a turn');
-		assert.deepStrictEqual(log.events, [], 'and no event may arrive for it');
+		assert.strictEqual(log.deltas, 'from the second provider');
+		assert.strictEqual(chat.isBusy, false, 'and the session is free afterwards');
 	});
 
 	test('a missing conversation fails the send, not the stream', async () => {
@@ -722,7 +732,7 @@ suite('Desktop: chat session', () => {
 		const second = session();
 		assert.deepStrictEqual(second.listProviders().map((provider) => provider.baseUrl), [LOCAL_URL]);
 
-		const listed = await second.listConversations(LOCAL_ID);
+		const listed = await second.listConversations();
 		assert.strictEqual(listed.length, 1);
 		assert.strictEqual(listed[0].id, conversation.summary.id);
 
@@ -792,7 +802,7 @@ suite('Desktop: chat session', () => {
 		const second = await chat.createConversation({ providerId: LOCAL_ID, title: 'Second' });
 
 		assert.notStrictEqual(first.summary.id, second.summary.id);
-		const listed = await chat.listConversations(LOCAL_ID);
+		const listed = await chat.listConversations();
 		assert.strictEqual(listed.length, 2);
 		assert.deepStrictEqual(new Set(listed.map((item) => item.id)), new Set([
 			first.summary.id,
@@ -821,7 +831,35 @@ suite('Desktop: chat session', () => {
 			() => chat.createConversation({ providerId: 'ghost' }),
 			/No provider named "ghost"/,
 		);
-		assert.deepStrictEqual(await chat.listConversations('ghost'), []);
+		// The list is not scoped to a provider, so there is nothing to be empty
+		// for here: a conversation created for a provider that does not exist is
+		// refused above, and every conversation that does exist is listed.
+		assert.ok(Array.isArray(await chat.listConversations()));
+	});
+
+	test('a conversation outlives the provider it was created with', async () => {
+		// The regression this pins: the list used to be filtered by provider, so
+		// selecting a second provider's model swapped the conversation list and the
+		// conversation being read appeared to be thrown away. A turn names its own
+		// provider, so a conversation is a transcript and the provider is a
+		// per-turn choice — the two are independent.
+		const chat = await readySession(scriptedFetch([]).fetchImpl);
+		const conversation = await chat.createConversation({ providerId: LOCAL_ID, title: 'Carried' });
+
+		// A second provider, configured and enabled, exactly like a user adding a
+		// second endpoint.
+		await chat.saveProvider({ baseUrl: SECOND_URL, name: 'Second' });
+
+		const listed = await chat.listConversations();
+		assert.deepStrictEqual(
+			new Set(listed.map((item) => item.id)),
+			new Set([conversation.summary.id]),
+			'the conversation is listed once, not once per configured provider',
+		);
+
+		// And it is still readable under the new provider's selection.
+		const opened = await chat.openConversation(conversation.summary.id);
+		assert.strictEqual(opened.summary.title, 'Carried');
 	});
 
 	test('opening a missing conversation is refused rather than returning an empty one', async () => {
@@ -839,7 +877,7 @@ suite('Desktop: chat session', () => {
 		assert.strictEqual(await chat.deleteConversation(second.summary.id), true);
 		assert.strictEqual(await chat.deleteConversation(second.summary.id), false);
 		assert.deepStrictEqual(
-			(await chat.listConversations(LOCAL_ID)).map((item) => item.id),
+			(await chat.listConversations()).map((item) => item.id),
 			[first.summary.id],
 		);
 	});
@@ -866,7 +904,7 @@ suite('Desktop: chat session', () => {
 		const older = await chat.createConversation({ providerId: LOCAL_ID, title: 'Older' });
 		const newer = await chat.createConversation({ providerId: LOCAL_ID, title: 'Newer' });
 
-		const listed = await chat.listConversations(LOCAL_ID);
+		const listed = await chat.listConversations();
 		assert.deepStrictEqual(
 			listed.map((item) => item.id),
 			[newer.summary.id, older.summary.id],
@@ -1074,7 +1112,7 @@ suite('Desktop: chat session', () => {
 
 		// Second process: same files, fresh objects.
 		const second = session();
-		const listed = await second.listConversations(LOCAL_ID);
+		const listed = await second.listConversations();
 		assert.strictEqual(listed.length, 1);
 		assert.strictEqual(listed[0].title, 'Renamed after restart');
 
