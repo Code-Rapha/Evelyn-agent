@@ -226,15 +226,6 @@ function renderProviderForm(): void {
 			? 'none configured'
 			: `${provider.name}${provider.hasApiKeyRef ? ' · key stored' : ''}`;
 
-	// The count on the list panel's summary. Without it that panel is a heading
-	// and a button, which says nothing about what is already configured.
-	const configured = state.providers.length;
-	byId<HTMLElement>('provider-count').textContent =
-		configured === 0
-			? 'none yet'
-			: configured === 1
-				? '1 configured'
-				: `${configured} configured`;
 
 	// The panel opens itself while there is nothing configured — that is when
 	// it has to be used — and folds away once the first provider appears, which
@@ -1655,6 +1646,42 @@ function setSettingsOpen(open: boolean, options: { moveFocus?: boolean } = {}): 
 	}
 }
 
+/**
+ * Shows one settings section and hides the rest.
+ *
+ * `hidden` rather than a class, so the sections are gone from the accessibility
+ * tree and the tab order rather than merely invisible. The `hidden` attribute
+ * needs the matching `.panel[hidden] { display: none }` in the stylesheet, since
+ * an author `display: flex` beats the browser's own rule for the attribute.
+ *
+ * The section names are read off the markup rather than hardcoded here, so
+ * adding a section is one panel plus one nav button and nothing else.
+ */
+function setActiveSection(name: string): void {
+	for (const panel of document.querySelectorAll<HTMLElement>('.panel[data-section]')) {
+		panel.hidden = panel.dataset['section'] !== name;
+	}
+	for (const item of document.querySelectorAll<HTMLElement>('.settings-nav-item')) {
+		item.setAttribute('aria-pressed', String(item.dataset['section'] === name));
+	}
+}
+
+/** Wires the settings section list. Only meaningful in the settings window. */
+function bindSettingsNav(): void {
+	for (const item of document.querySelectorAll<HTMLElement>('.settings-nav-item')) {
+		item.addEventListener('click', () => {
+			const name = item.dataset['section'];
+			if (name !== undefined) {
+				setActiveSection(name);
+			}
+		});
+	}
+	// Starts on whichever section the markup marks as pressed, so the first
+	// section is chosen in the markup rather than duplicated here.
+	const initial = document.querySelector<HTMLElement>('.settings-nav-item[aria-pressed="true"]');
+	setActiveSection(initial?.dataset['section'] ?? 'providers');
+}
+
 /** Sizes a textarea to its content, up to the stylesheet's `max-height`. */
 function autoGrow(textarea: HTMLTextAreaElement): void {
 	textarea.style.height = 'auto';
@@ -1687,6 +1714,9 @@ async function main(): Promise<void> {
 	await Promise.all([loadCoreStatus(), refreshProviders()]);
 
 	if (document.body.dataset.window === 'settings') {
+		// Only one section is ever on screen, so the nav decides what the body
+		// shows before anything else reads it.
+		bindSettingsNav();
 		// The model panel is `.only-chat`, so this window never renders it — and
 		// the list costs one request per provider. Loading it here meant the
 		// settings window asked every endpoint for a list it then threw away,

@@ -413,6 +413,64 @@ body {
 	color: var(--text);
 }
 
+/* ── settings navigation ─────────────────────────────────────────────────── */
+
+/*
+ * The section list inside the settings window.
+ *
+ * A sidebar of its own rather than the app's: the sections are settings-only,
+ * and reusing the edge drawer for them would make one control mean two different
+ * things in two windows.
+ *
+ * It is a list of buttons rather than links because switching section never
+ * navigates — the document is the same either way.
+ */
+.settings-nav {
+	display: none;
+	flex-direction: column;
+	gap: 2px;
+	padding: 12px;
+	border-bottom: 1px solid var(--border);
+}
+
+body[data-window='settings'] .settings-nav {
+	display: flex;
+}
+
+.settings-nav-item {
+	padding: 7px 12px;
+	border: 1px solid transparent;
+	border-radius: 7px;
+	background: transparent;
+	color: var(--muted);
+	font-size: 13px;
+	font-weight: 500;
+	text-align: left;
+	cursor: pointer;
+}
+
+.settings-nav-item:hover {
+	background: var(--surface-raised);
+	color: var(--text);
+	filter: none;
+}
+
+/*
+ * Marked by weight and colour rather than by a block border: a filled block in
+ * a 200px column reads as a selected row in a table, which these are not.
+ */
+.settings-nav-item[aria-pressed='true'] {
+	background: var(--accent-soft);
+	border-color: var(--accent);
+	color: var(--accent);
+	font-weight: 600;
+}
+
+.settings-nav-item:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
 /* ── window roles ────────────────────────────────────────────────────────── */
 
 /*
@@ -513,22 +571,31 @@ body[data-window='settings'] .drawer-head h2 {
 }
 
 body[data-window='settings'] .drawer-body {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 	/*
-	 * No `align-content: start`. The grid's single row would otherwise be sized
-	 * to its content and the columns would sit in the top 488px of an 895px
-	 * body, leaving the rest of a maximised window empty — which is the same
-	 * dead space this layout exists to remove, moved from "below the panels" to
-	 * "below the columns".
+	 * One column now. Sections mean only one is ever showing, so a two-column
+	 * grid would leave half a maximised window empty — which is what happened
+	 * before sections existed, when the columns were sized by how many panels
+	 * each happened to hold.
+	 *
+	 * Capped rather than full width: a text input stretched across 2000px is
+	 * harder to read and gives a single field the whole window.
 	 */
+	display: flex;
+	flex-direction: column;
+	align-content: start;
 	gap: 16px;
-	/*
-	 * Still a scroll container. Two columns fit on a maximised window, but a
-	 * short screen or a large system font can still push the second row past the
-	 * bottom, and this must not become the thing that hides content again.
-	 */
+	max-width: 920px;
+	width: 100%;
 	overflow-y: auto;
+}
+
+/*
+ * `hidden` has to win over `.panel`'s `display: flex` — the same trap as
+ * `.thinking`, where an author `display` beats the browser's own rule for the
+ * attribute and the element never hides at all.
+ */
+.panel[hidden] {
+	display: none;
 }
 
 /*
@@ -571,6 +638,7 @@ body[data-window='settings'] #system-prompt {
 
 body[data-window='settings'] .drawer-col {
 	overflow: visible;
+	display: contents;
 }
 
 /*

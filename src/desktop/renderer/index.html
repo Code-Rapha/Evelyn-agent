@@ -228,7 +228,26 @@
 				</button>
 			</header>
 
-			<div class="drawer-body">
+			<nav class="settings-nav" aria-label="Settings sections">
+					<button
+						type="button"
+						class="settings-nav-item"
+						data-section="providers"
+						aria-pressed="true"
+					>
+						Providers
+					</button>
+					<button
+						type="button"
+						class="settings-nav-item"
+						data-section="project"
+						aria-pressed="false"
+					>
+						Project
+					</button>
+				</nav>
+
+				<div class="drawer-body">
 				<!-- Column A. The two panels that are tall when open, so the
 				     height they take balances against the collapsed forms. -->
 				<div class="drawer-col drawer-col-a">
@@ -310,7 +329,15 @@
 					</details>
 				</section>
 
-					<section class="panel growable only-settings">
+					<!--
+					System prompt: the chat window's sidebar.
+
+					It belongs to a conversation, so it belongs where you are
+					choosing the conversation. In settings it had no list
+					beside it saying which conversation it applied to, which
+					made it a field that could edit the wrong one silently.
+				-->
+				<section class="panel growable only-chat">
 					<details id="system-panel" class="system" open>
 						<summary>
 							<span class="summary-title">System prompt</span>
@@ -339,38 +366,24 @@
 
 				<!-- Column B. One summary line each until opened. -->
 				<div class="drawer-col drawer-col-b">
-					<!--
-					Providers.
-
-					The entry point, kept above the form it opens. Clicking it
-					unfolds the provider panel and puts the cursor in the base
-					URL, which is the first thing a new provider needs; the
-					panel is closed by default so this is what a first-time
-					user sees rather than a wall of fields.
-				-->
-				<section class="panel only-settings">
-					<details id="provider-list-panel">
-						<summary>
-							<span class="summary-title">Providers</span>
-							<span id="provider-count" class="muted small"></span>
-						</summary>
-
-						<div class="panel-body">
-							<button id="provider-add" type="button" class="secondary">Add provider</button>
-
-							<p id="provider-add-error" class="error" hidden></p>
-						</div>
-					</details>
-				</section>
-
-				<section class="panel only-settings">
-					<details id="provider-panel">
+					<section class="panel only-settings" data-section="providers">
+					<details id="provider-panel" open>
 						<summary>
 							<span class="summary-title">Provider</span>
 							<span id="provider-current" class="muted small"></span>
 						</summary>
 
 						<div class="panel-body">
+							<!--
+								Starting a new provider. Inside this panel rather
+								than in one of its own: a separate panel holding
+								only a button read as a second provider stacked on
+								top of the first.
+							-->
+							<button id="provider-add" type="button" class="secondary subtle">
+								Add provider
+							</button>
+
 							<select id="provider-select" aria-label="Provider"></select>
 
 							<form id="provider-form" class="stack">
@@ -417,7 +430,7 @@
 					</details>
 				</section>
 
-					<section class="panel only-settings">
+					<section class="panel only-settings" data-section="project">
 					<details id="project-panel">
 						<summary>
 							<span class="summary-title">Project</span>
