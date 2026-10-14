@@ -1441,17 +1441,24 @@ button.subtle {
  * so they would be laid out underneath a floating bar whose height changes with
  * the text, and they would end up hidden behind it.
  */
+/*
+ * Inset from the window edge on all four sides, not flush.
+ *
+ * Flush was tried and it is wrong: `.frame` has a 12px radius and clips its
+ * overflow, so a composer sitting on the bottom edge loses its own corners to
+ * the window's, and the bar reads as cut off rather than as a bar. A margin
+ * keeps both radii intact and leaves the control somewhere it can be seen.
+ */
 .composer {
 	flex: none;
-	margin: 8px 28px 0;
-	padding: 12px 12px 14px;
+	margin: 8px 28px 20px;
+	padding: 12px;
 	border: 1px solid var(--border);
-	border-bottom: 0;
-	/* Square against the window edge, rounded where it meets the transcript.
-	   The bottom pair is moot: `.app`'s own radius clips them away. */
-	border-radius: 14px 14px 0 0;
+	border-radius: 14px;
+	/* Lighter than the app behind it, so the HUD separates without a heavy
+	   fill. Over a bright desktop this still composites dark enough to read. */
 	background: rgb(12 27 18 / 82%);
-	box-shadow: 0 -8px 32px rgb(0 0 0 / 40%);
+	box-shadow: 0 8px 32px rgb(0 0 0 / 40%);
 }
 
 .composer .error {
