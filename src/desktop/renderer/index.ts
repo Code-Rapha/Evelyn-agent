@@ -226,6 +226,16 @@ function renderProviderForm(): void {
 			? 'none configured'
 			: `${provider.name}${provider.hasApiKeyRef ? ' · key stored' : ''}`;
 
+	// The count on the list panel's summary. Without it that panel is a heading
+	// and a button, which says nothing about what is already configured.
+	const configured = state.providers.length;
+	byId<HTMLElement>('provider-count').textContent =
+		configured === 0
+			? 'none yet'
+			: configured === 1
+				? '1 configured'
+				: `${configured} configured`;
+
 	// The panel opens itself while there is nothing configured — that is when
 	// it has to be used — and folds away once the first provider appears, which
 	// is what gives the conversation list the room.
@@ -1231,6 +1241,17 @@ function bindEvents(bridge: SeshyinaBridge): void {
 	byId('provider-form').addEventListener('submit', (event) => void saveProvider(event));
 	byId<HTMLButtonElement>('provider-models').addEventListener('click', () => void loadModels());
 	byId<HTMLButtonElement>('model-refresh').addEventListener('click', () => void loadModels());
+
+	// Opens the provider form and puts the cursor in the first field.
+	//
+	// The form is a real destination rather than something this button
+	// duplicates: the base URL is what a new provider needs first, and the name
+	// and key are optional. Focusing it saves the user finding the panel at all.
+	byId<HTMLButtonElement>('provider-add').addEventListener('click', () => {
+		const panel = byId<HTMLDetailsElement>('provider-panel');
+		panel.open = true;
+		byId<HTMLInputElement>('provider-base-url').focus();
+	});
 	byId<HTMLButtonElement>('provider-remove').addEventListener('click', () => void removeProvider());
 
 	byId('project-form').addEventListener('submit', (event) => void saveProject(event));

@@ -258,7 +258,15 @@
 					</details>
 				</section>
 
-					<section class="panel growable">
+					<!--
+					Conversations: the chat window only.
+
+					Hidden from settings because picking a conversation is part
+					of chatting, not of configuring. The consequence is noted on
+					the system prompt panel below, which is per conversation and
+					now has no list beside it to say which one it applies to.
+				-->
+				<section class="panel growable only-chat">
 					<details id="conversation-panel" open>
 						<summary>
 							<span class="summary-title">Conversations</span>
@@ -331,7 +339,31 @@
 
 				<!-- Column B. One summary line each until opened. -->
 				<div class="drawer-col drawer-col-b">
-					<section class="panel only-settings">
+					<!--
+					Providers.
+
+					The entry point, kept above the form it opens. Clicking it
+					unfolds the provider panel and puts the cursor in the base
+					URL, which is the first thing a new provider needs; the
+					panel is closed by default so this is what a first-time
+					user sees rather than a wall of fields.
+				-->
+				<section class="panel only-settings">
+					<details id="provider-list-panel">
+						<summary>
+							<span class="summary-title">Providers</span>
+							<span id="provider-count" class="muted small"></span>
+						</summary>
+
+						<div class="panel-body">
+							<button id="provider-add" type="button" class="secondary">Add provider</button>
+
+							<p id="provider-add-error" class="error" hidden></p>
+						</div>
+					</details>
+				</section>
+
+				<section class="panel only-settings">
 					<details id="provider-panel">
 						<summary>
 							<span class="summary-title">Provider</span>
