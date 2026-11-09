@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="pt-BR">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Evelyn</title>
+		<link rel="stylesheet" href="/index.css" />
+	</head>
+	<body>
+		<!--
+			The shell: the areas of the router on the left, one of them on the
+			right.
+
+			The page is a document with one main that the script re-renders.
+			No framework: the areas are links, the hash says which one, and
+			each area is a function that returns markup for data that came
+			from the API.
+		-->
+		<div class="shell">
+			<aside class="sidebar">
+				<div class="brand">
+					<span class="brand-name">Evelyn</span>
+					<span class="brand-sub">roteador de IA</span>
+				</div>
+
+				<nav class="nav" aria-label="Áreas">
+					<a class="nav-link" href="#overview" data-area="overview">Visão geral</a>
+					<a class="nav-link" href="#providers" data-area="providers">Providers</a>
+					<a class="nav-link" href="#models" data-area="models">Models</a>
+					<a class="nav-link" href="#chat" data-area="chat">Chat</a>
+					<a class="nav-link" href="#combos" data-area="combos">
+						Combos
+						<span class="nav-badge" data-pending-badge hidden>pendente</span>
+					</a>
+					<a class="nav-link" href="#routing" data-area="routing">Routing</a>
+					<a class="nav-link" href="#usage" data-area="usage">Usage</a>
+					<a class="nav-link" href="#turns" data-area="turns">Turnos</a>
+					<a class="nav-link" href="#settings" data-area="settings">Settings</a>
+				</nav>
+
+				<div class="sidebar-foot">
+					<span id="session">
+						<span class="session-dot" id="session-dot"></span>
+						<span id="session-label">conectando…</span>
+					</span>
+					<span id="server-info"></span>
+				</div>
+			</aside>
+
+			<!--
+				O formulário de uma conexão.
+
+				Fica escondido até o usuário pedir para adicionar: a página abre
+				mostrando o que existe, e adicionar é uma ação, não o estado
+				inicial. A chave é um campo de senha e nunca volta preenchida.
+			-->
+			<dialog class="dialog" id="provider-dialog" aria-labelledby="provider-dialog-title">
+				<form class="dialog-form" id="provider-form" method="dialog">
+					<h2 id="provider-dialog-title">Nova conexão</h2>
+
+					<label class="field">
+						<span class="field-label">Nome</span>
+						<input id="provider-name" type="text" autocomplete="off" spellcheck="false" placeholder="Meu provedor" />
+						<span class="field-hint">Como a conexão aparece na lista. Em branco, o nome vem do endereço.</span>
+					</label>
+
+					<label class="field">
+						<span class="field-label">Endpoint (base URL)</span>
+						<input id="provider-base-url" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.exemplo.com/v1" required />
+						<span class="field-hint">Compatível com a API OpenAI: o endereço base, terminando em <code>/v1</code> quando o serviço exigir.</span>
+					</label>
+
+					<label class="field">
+						<span class="field-label">Autenticação</span>
+						<select id="provider-auth">
+							<option value="bearer">Chave de API (Bearer)</option>
+							<option value="none">Sem chave</option>
+						</select>
+						<span class="field-hint">A chave vai apenas para o armazenamento seguro desta máquina e nunca é devolvida pela API.</span>
+					</label>
+
+					<label class="field" id="provider-key-field">
+						<span class="field-label">Chave de API</span>
+						<input id="provider-key" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-…" />
+						<span class="field-hint" id="provider-key-hint">Enviada uma vez; depois disso, em branco mantém a chave guardada.</span>
+					</label>
+
+					<p class="error" id="provider-form-error" role="alert" hidden></p>
+
+					<div class="dialog-actions">
+						<button type="button" class="button secondary" id="provider-cancel">Cancelar</button>
+						<button type="button" class="button" id="provider-test">Testar conexão</button>
+						<button type="submit" class="button" id="provider-submit">Salvar conexão</button>
+					</div>
+				</form>
+			</dialog>
+
+			<main class="main" id="main">
+				<div class="loading">
+					<span class="loading-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+					carregando…
+				</div>
+			</main>
+		</div>
+
+		<script src="/index.js"></script>
+	</body>
+</html>
