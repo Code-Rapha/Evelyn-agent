@@ -91,7 +91,7 @@ const READING_TOOLS: ReadonlySet<string> = new Set([
  * executar outra" que a auditoria pediu para fechar. Agora ele sempre pergunta,
  * com o comando exato (ver `EXPLICIT_TOOLS`).
  */
-const SCOPED_TOOLS: ReadonlySet<string> = new Set(['dev_write']);
+const SCOPED_TOOLS: ReadonlySet<string> = new Set(['dev_write', 'dev_edit']);
 
 /**
  * O que nunca se reutiliza, e por quê.
@@ -126,7 +126,7 @@ const EXPLICIT_TOOLS: Readonly<Record<string, string>> = {
  * repositório, e cujo caminho podia ser montado fora dele. A lista explícita
  * abaixo é a única fonte: o que não está nela não herda escopo.
  */
-const DEV_REPOSITORY_WRITES: ReadonlySet<string> = new Set(['dev_write']);
+const DEV_REPOSITORY_WRITES: ReadonlySet<string> = new Set(['dev_write', 'dev_edit']);
 
 /**
  * Escritas no **workspace do projeto**, não no repositório DEV.

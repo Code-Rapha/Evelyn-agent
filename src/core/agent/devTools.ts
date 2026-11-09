@@ -25,7 +25,7 @@
  * sessão em memória do processo principal.
  */
 
-import { writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import type { AgentTool, ToolDescriptor, ToolExecutionContext, ToolResult } from './types';
@@ -51,6 +51,7 @@ import type { PreparedChange } from '../dev/preparedChange';
 
 export const DEV_READ = 'dev_read';
 export const DEV_WRITE = 'dev_write';
+export const DEV_EDIT = 'dev_edit';
 export const DEV_RUN = 'dev_run';
 export const DEV_CHECKPOINT = 'dev_checkpoint';
 export const DEV_RESTORE = 'dev_restore';
@@ -452,6 +453,136 @@ export function createDevWriteTool(
 	};
 }
 
+/**
+ * `dev_edit`: troca um trecho exato, sem reescrever o arquivo inteiro.
+ *
+ * ## Por que existe
+ *
+ * `dev_write` recebe o **conteúdo completo**. Num arquivo de 270 KB, trocar
+ * uma linha significava o modelo reemitir as 6 805 linhas — e um erro no meio
+ * corromperia o arquivo por causa de uma palavra. Medido: a agente encontrou
+ * a linha certa, recusou-se a regravar o arquivo (com razão) e a mudança
+ * parou ali.
+ *
+ * A substituição exata resolve o caso geral: `oldText` tem de aparecer no
+ * arquivo, e **uma única vez** quando `replaceAll` não vem. Zero ocorrências
+ * é recusa (o trecho não está lá); mais de uma também é recusa (qual delas?),
+ * e o resultado diz quantas são — o modelo corrige o trecho e tenta de novo,
+ * em vez de adivinhar.
+ *
+ * O checkpoint e a trava são os mesmos de `dev_write`: a escrita continua
+ * sendo uma escrita, e o arquivo anterior continua recuperável.
+ */
+export function createDevEditTool(
+	deps: DevToolDeps,
+): AgentTool<unknown, { readonly path: string; readonly replacements: number; readonly bytes: number; readonly checkpoint: string; readonly operationId?: string }> {
+	const descriptor: ToolDescriptor = {
+		id: DEV_EDIT,
+		name: DEV_EDIT,
+		category: 'filesystem',
+		riskLevel: 'dangerous',
+		description:
+			'Replace an exact piece of text in a file of the Evelyn repository, after a checkpoint (DEV mode only)',
+	};
+	return {
+		descriptor,
+		async execute(input): Promise<
+			ToolResult<{ path: string; replacements: number; bytes: number; checkpoint: string; operationId?: string }>
+		> {
+			if (!deps.session.isActive()) {
+				return inactive();
+			}
+			const storeCache: { current?: DevOperation } = {};
+			try {
+				const requested = argString(input, 'path');
+				const oldText = argString(input, 'oldText');
+				const newText = argString(input, 'newText');
+				const replaceAll = (input as { readonly replaceAll?: unknown } | undefined)?.replaceAll === true;
+				if (oldText.length === 0) {
+					throw new AgentError('"oldText" está vazio: diga exatamente o que deve sair do arquivo');
+				}
+				if (oldText === newText) {
+					throw new AgentError('"oldText" e "newText" são iguais: nada mudaria');
+				}
+				const root = deps.session.root();
+				const resolved = await safePath(deps.session, requested, 'write');
+				const before = await readFile(resolved, 'utf8').catch((error: unknown) => {
+					const code = (error as { readonly code?: unknown } | undefined)?.code;
+					if (code === 'ENOENT') {
+						throw new AgentError(`o arquivo "${requested}" não existe no repositório`);
+					}
+					throw error;
+				});
+				const occurrences = countOccurrences(before, oldText);
+				if (occurrences === 0) {
+					throw new AgentError(
+						`"oldText" não aparece em "${requested}". Leia o arquivo e copie o trecho exatamente como está — espaços, acentos e quebras de linha contam.`,
+					);
+				}
+				if (occurrences > 1 && !replaceAll) {
+					throw new AgentError(
+						`"oldText" aparece ${occurrences} vezes em "${requested}". Inclua o contexto que distingue o trecho, ou passe "replaceAll": true para trocar todas.`,
+					);
+				}
+				const after = replaceAll
+					? before.split(oldText).join(newText)
+					: before.replace(oldText, () => newText);
+				const journal = deps.journal;
+				const requestedOperation = (input as { readonly operationId?: unknown } | undefined)?.operationId;
+				const operationId =
+					journal === undefined
+						? undefined
+						: typeof requestedOperation === 'string' && journal.get(requestedOperation) !== undefined
+							? requestedOperation
+							: journal.start({ root, files: [], sessionToken: deps.session.sessionToken() }).operationId;
+				return await withRepositoryLock(deps, undefined, async () => {
+					const checkpoint = await deps.checkpoints.capture({
+						root,
+						path: requested,
+						operation: 'dev_edit',
+					});
+					// Escrita atômica: o arquivo é substituído inteiro, nunca meio
+					// escrito. Uma interrupção deixa o anterior, não um híbrido.
+					await writeFile(resolved, after, 'utf8');
+					await deps.checkpoints.seal(checkpoint, root, requested);
+					if (journal !== undefined && operationId !== undefined) {
+						const prepared = journal.note({ operationId, path: requested, content: after });
+						if (deps.operations !== undefined && prepared !== undefined) {
+							await recordWritten(deps.operations, prepared, storeCache, deps.now);
+						}
+					}
+					return {
+						ok: true as const,
+						output: {
+							path: requested,
+							replacements: replaceAll ? occurrences : 1,
+							bytes: Buffer.byteLength(after, 'utf8'),
+							checkpoint,
+							...(operationId !== undefined ? { operationId } : {}),
+						},
+					};
+				});
+			} catch (error) {
+				return failure(error);
+			}
+		},
+	};
+}
+
+/** Quantas vezes `needle` aparece em `haystack`, sem sobreposição. */
+function countOccurrences(haystack: string, needle: string): number {
+	if (needle.length === 0) {
+		return 0;
+	}
+	let count = 0;
+	let at = haystack.indexOf(needle);
+	while (at !== -1) {
+		count += 1;
+		at = haystack.indexOf(needle, at + needle.length);
+	}
+	return count;
+}
+
 /** `dev_run`: roda uma verificação permitida no repositório. */
 export function createDevRunTool(
 	deps: DevToolDeps,
@@ -590,6 +721,7 @@ export function createDevTools(deps: DevToolDeps): readonly AgentTool[] {
 	const tools: AgentTool[] = [
 		createDevReadTool(deps),
 		createDevWriteTool(deps),
+		createDevEditTool(deps),
 		createDevRunTool(deps),
 		createDevCheckpointTool(deps),
 		createDevRestoreTool(deps),
@@ -657,6 +789,30 @@ export const DEV_TOOL_SPECS: readonly ToolSpec[] = [
 				content: { type: 'string', description: 'The full text to write' },
 			},
 			required: ['path', 'content'],
+		},
+		riskLevel: 'dangerous',
+		category: 'filesystem',
+	},
+	{
+		name: DEV_EDIT,
+		description:
+			'Replace an exact piece of text in a file of the Evelyn repository, after a checkpoint. Use this instead of writing the whole file back when only part of it changes (DEV mode only)',
+		parameters: {
+			type: 'object',
+			properties: {
+				path: { type: 'string', description: 'Path relative to the repository root' },
+				oldText: {
+					type: 'string',
+					description:
+						'The exact text to replace, copied from the file. It must appear in the file, and exactly once unless replaceAll is true.',
+				},
+				newText: { type: 'string', description: 'The text that takes its place' },
+				replaceAll: {
+					type: 'boolean',
+					description: 'Replace every occurrence. Without it, an ambiguous match is refused instead of guessed.',
+				},
+			},
+			required: ['path', 'oldText', 'newText'],
 		},
 		riskLevel: 'dangerous',
 		category: 'filesystem',

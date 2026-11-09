@@ -166,6 +166,7 @@ suite('DEV-5 host: montagem e autorização', () => {
 		assert.deepEqual([...toolsNow(h).keys()], [
 			'dev_read',
 			'dev_write',
+			'dev_edit',
 			'dev_run',
 			'dev_checkpoint',
 			'dev_restore',
