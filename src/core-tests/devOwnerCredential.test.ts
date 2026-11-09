@@ -278,7 +278,10 @@ suite('DEV-7: a credencial em disco', () => {
 suite('DEV-7: o prompt de autorização', () => {
 	test('a pergunta tem id novo e só a resposta da mesma pergunta vale', async () => {
 		const sent: OwnerPrompt[] = [];
-		const broker = new OwnerPromptBroker((prompt) => sent.push(prompt));
+		const broker = new OwnerPromptBroker((prompt) => {
+			sent.push(prompt);
+			return true;
+		});
 
 		const first = broker.ask('authorize', { title: 't', detail: 'd' });
 		const prompt = sent[0];
@@ -294,7 +297,7 @@ suite('DEV-7: o prompt de autorização', () => {
 	});
 
 	test('duas perguntas ao mesmo tempo: a segunda é recusada', async () => {
-		const broker = new OwnerPromptBroker(() => undefined);
+		const broker = new OwnerPromptBroker(() => true);
 		const first = broker.ask('authorize', { title: 'a', detail: 'b' });
 		const second = await broker.ask('configure', { title: 'a', detail: 'b' });
 
@@ -304,11 +307,29 @@ suite('DEV-7: o prompt de autorização', () => {
 	});
 
 	test('a pergunta expira', async () => {
-		const broker = new OwnerPromptBroker(() => undefined, { ttlMs: 10 });
+		const broker = new OwnerPromptBroker(() => true, { ttlMs: 10 });
 		const pending = broker.ask('authorize', { title: 'a', detail: 'b' });
 
 		assert.equal((await pending).kind, 'expired');
 		assert.equal(broker.answer({ id: 'auth-000000000000000000', kind: 'cancel' }).accepted, false);
+	});
+
+	// DEV-10: o defeito medido no pacote. Sem janela para desenhar o
+	// diálogo, a promessa esperava os 120 s de validade com o `busy` do host
+	// ligado — e a ação seguinte respondia "há uma ação DEV em andamento" sem
+	// nada em andamento. Uma pergunta que não pode ser mostrada tem de fechar
+	// já, não ficar pendurada.
+	test('sem janela para a pergunta, ela é recusada de imediato', async () => {
+		const broker = new OwnerPromptBroker(() => false, { ttlMs: 120_000 });
+		const started = Date.now();
+		const outcome = await broker.ask('authorize', { title: 'a', detail: 'b' });
+		const elapsed = Date.now() - started;
+
+		assert.equal(outcome.kind, 'rejected');
+		assert.equal(broker.waiting, false);
+		// Não esperou o prazo: o relógio não pode ser a saída de um estado
+		// travado.
+		assert.ok(elapsed < 1000, `esperou ${elapsed} ms; devia recusar já`);
 	});
 });
 
@@ -342,6 +363,7 @@ suite('DEV-7: o host só ativa com a credencial validada', () => {
 		const sent: OwnerPrompt[] = [];
 		const prompts = new OwnerPromptBroker((prompt) => {
 			sent.push(prompt);
+			return true;
 		});
 		const created = new DevHost({
 			repositoryRoot: repo,
@@ -408,6 +430,53 @@ suite('DEV-7: o host só ativa com a credencial validada', () => {
 		assert.equal(state.localCredential.kind, 'not-configured');
 		assert.match(state.activationBlockedReason ?? '', /configure a autorização/);
 		assert.equal(h.sent.length, 0, 'nem pergunta a senha sem credencial');
+	});
+
+	// DEV-10: o defeito relatado. A pergunta não tinha onde aparecer; a
+	// promessa ficava aberta, `busy` ficava ligado, e **toda** ação DEV
+	// seguinte respondia "há uma ação DEV em andamento" — inclusive a
+	// tentativa de ativar de novo. Uma ação que não pôde perguntar tem de
+	// devolver o host ao estado em que a próxima tentativa funciona.
+	test('sem janela para a pergunta, o host não fica preso em "ação em andamento"', async () => {
+		const repo = await makeDir('evelyn-dev10-repo-');
+		execFileSync('git', ['init', '-q'], { cwd: repo, stdio: 'ignore' });
+		const data = await makeDir('evelyn-dev10-data-');
+		const credential = store(join(data, 'dev'));
+		assert.equal((await credential.configure(PASSWORD, PASSWORD)).ok, true);
+		// O broker recebe a pergunta e não a entrega a ninguém: é o que
+		// acontecia quando não havia janela de configurações aberta.
+		const prompts = new OwnerPromptBroker(() => false);
+		const created = new DevHost({
+			repositoryRoot: repo,
+			dataRoot: data,
+			window: () => ({
+				isWindowAlive: () => true,
+				isWindowReady: () => true,
+				reloadWindow: async () => undefined,
+				restartApplication: async () => undefined,
+			}),
+			runCheck: async () => ({ exitCode: 0, summary: 'ok' }),
+			readLocalInstance: async () => ({ kind: 'single', sessionId: '1', processes: 1 }),
+			credential,
+			prompt: prompts,
+			ownerActions: {
+				configure: async () => ({ ok: true, message: '' }),
+				reset: async () => ({ ok: true, message: '' }),
+			},
+		});
+		await created.setup();
+		hosts.push(created);
+
+		await assert.rejects(created.activateFromPanel(), /não há janela aberta/);
+
+		// O painel continua oferecendo a ação — o `busy` não sobreviveu.
+		const state = await created.panelState();
+		assert.equal(state.session, 'inactive');
+		assert.equal(state.canActivate, true, 'a ativação continua disponível depois da recusa');
+
+		// E uma segunda tentativa chega a perguntar de novo, em vez de
+		// responder "em andamento".
+		await assert.rejects(created.activateFromPanel(), /não há janela aberta/);
 	});
 
 	test('senha errada não ativa; senha certa ativa na tentativa seguinte', async () => {
@@ -486,7 +555,10 @@ suite('DEV-7: o host só ativa com a credencial validada', () => {
 		const data = await makeDir('evelyn-dev7-data-');
 		const credential = store(join(data, 'dev'));
 		const sent: OwnerPrompt[] = [];
-		const prompts = new OwnerPromptBroker((prompt) => sent.push(prompt));
+		const prompts = new OwnerPromptBroker((prompt) => {
+			sent.push(prompt);
+			return true;
+		});
 		const created = new DevHost({
 			repositoryRoot: repo,
 			dataRoot: data,

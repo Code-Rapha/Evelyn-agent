@@ -43,7 +43,7 @@ import { DevHost, type DevHostWindow } from './devHost';
 import { parseDevRequest, parseOwnerPromptAnswer } from './devControl';
 import { readLocalInstance } from './localInstance';
 import { OwnerCredentialStore } from './ownerCredential';
-import { OwnerPromptBroker } from './ownerPrompt';
+import { OwnerPromptBroker, type OwnerPrompt } from './ownerPrompt';
 import { currentWindowsUser } from './windowsDpapi';
 import type { DevPanelState } from '../core/dev/devPanel';
 import type { AssembledCore } from '../app/assemble';
@@ -93,6 +93,7 @@ import {
 	DEV_CHANNEL,
 	DEV_EVENT_CHANNEL,
 	DEV_OWNER_PROMPT_CHANNEL,
+	DEV_OWNER_PENDING_CHANNEL,
 	DEV_OWNER_ANSWER_CHANNEL,
 	MODEL_CHANNEL,
 	MODEL_CATALOG_CHANNEL,
@@ -2947,6 +2948,52 @@ async function main(): Promise<void> {
 		presentSettingsWindow();
 		return true;
 	});
+	/**
+	 * Leva a pergunta de autorização até a janela que sabe desenhá-la (DEV-10).
+	 *
+	 * O diálogo mora na seção DEV, que só existe na janela de configurações
+	 * (`.only-settings`). Entregar o evento à janela do chat fazia a pergunta
+	 * pousar num bloco oculto: o host ficava esperando a resposta até o prazo
+	 * de 120 s, e a ação seguinte respondia "há uma ação DEV em andamento".
+	 *
+	 * Se a janela ainda está carregando, o evento sai no `did-finish-load` —
+	 * mandar antes disso o renderer não tem ouvinte e a mensagem se perde.
+	 * A seção é trocada para DEV do lado da página, que é onde o `hidden` da
+	 * seção pode ser desfeito.
+	 */
+	const deliverOwnerPrompt = (prompt: OwnerPrompt): void => {
+		presentSettingsWindow();
+		const target = settingsWindow;
+		if (target === undefined || target.isDestroyed()) {
+			return;
+		}
+		const send = (): void => {
+			if (target.isDestroyed()) {
+				return;
+			}
+			target.webContents.send(DEV_OWNER_PROMPT_CHANNEL, prompt);
+		};
+		// A pergunta também fica **legível**: a janela pode estar montando
+		// quando o evento sai, e um ouvinte inscrito depois não recebe o que
+		// já passou. A página consulta `pendingDevOwnerPrompt()` ao montar.
+		// O evento continua indo — uma janela já montada desenha na hora.
+		if (target.webContents.isLoading()) {
+			target.webContents.once('did-finish-load', send);
+		} else {
+			send();
+		}
+	};
+	// DEV-10: a pergunta aberta, para a janela que chegar depois do evento.
+	// Só o que já ia no evento: id, tipo e texto — nunca senha.
+	ipcMain.handle(DEV_OWNER_PENDING_CHANNEL, (event) => {
+		const senderWindow = BrowserWindow.fromWebContents(event.sender);
+		// Só a janela de configurações desenha o diálogo; responder a outra
+		// página entregaria o texto a quem não o mostra.
+		if (settingsWindow === undefined || senderWindow !== settingsWindow) {
+			return null;
+		}
+		return ownerPrompts?.open ?? null;
+	});
 	// DEV-5: o host do modo DEV, montado depois da janela — o alvo precisa
 	// dela. `setup()` só verifica a raiz; a sessão **não** abre aqui: isso
 	// exige `ownerRequest()`, e a interface (DEV-6/DEV-7) só chega a ele com a
@@ -2969,11 +3016,19 @@ async function main(): Promise<void> {
 	// de qualquer janela que não seja a principal), então o diálogo é desenhado
 	// lá e a resposta viaja com o id que o host emitiu.
 	const prompts = new OwnerPromptBroker((prompt) => {
-		const target =
-			settingsWindow !== undefined && !settingsWindow.isDestroyed() ? settingsWindow : mainWindow;
-		if (target !== undefined && !target.isDestroyed()) {
-			target.webContents.send(DEV_OWNER_PROMPT_CHANNEL, prompt);
-		}
+		// DEV-10: a pergunta mora na janela de **configurações** (`.only-settings`).
+		// Mandá-la para a janela do chat a entregava a uma página onde a seção
+		// inteira está oculta: o evento chegava, nada aparecia, e a ação
+		// esperava os 120 s de validade com o host ocupado. Medido no pacote.
+		//
+		// Por isso a pergunta **traz** a janela: cria e foca a de configurações
+		// quando não há uma. É o que a pessoa faria para responder, e sem isso
+		// a ação DEV pedida não tem como terminar.
+		deliverOwnerPrompt(prompt);
+		// A entrega é assíncrona: a janela pode estar carregando. Devolver
+		// `true` aqui diz "há destino", não "já desenhou" — a página responde
+		// pelo `answerDevOwnerPrompt`, e o prazo continua valendo.
+		return true;
 	});
 	ownerPrompts = prompts;
 	devHost = new DevHost({

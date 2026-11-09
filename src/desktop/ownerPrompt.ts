@@ -85,12 +85,34 @@ export class OwnerPromptBroker {
 	private pending: Pending | undefined;
 
 	constructor(
-		private readonly send: (prompt: OwnerPrompt) => void,
+		/**
+		 * Entrega a pergunta à janela que a desenha.
+		 *
+		 * Devolve `false` quando **não há janela para receber**: o diálogo não
+		 * pousa em lugar nenhum, e esperar os 120 s de validade deixaria a
+		 * ação presa com `busy` ligado — o próximo clique responderia "há uma
+		 * ação DEV em andamento" sem nada em andamento. Medido no pacote com
+		 * o host chamado sem janela aberta.
+		 */
+		private readonly send: (prompt: OwnerPrompt) => boolean,
 		private readonly options: { readonly now?: () => Date; readonly ttlMs?: number } = {},
 	) {}
 
 	get waiting(): boolean {
 		return this.pending !== undefined;
+	}
+
+	/**
+	 * A pergunta aberta, para quem chegar depois do envio.
+	 *
+	 * Uma janela criada **por causa** da pergunta já pode estar montando
+	 * quando o evento é emitido: o renderer ainda não inscreveu o ouvinte, e
+	 * o evento se perde. A página pergunta por ela ao montar, e o que o
+	 * broker entrega aqui é o mesmo que o evento levou — nada de senha, só o
+	 * id, o tipo e o texto.
+	 */
+	get open(): OwnerPrompt | undefined {
+		return this.pending?.prompt;
 	}
 
 	/**
@@ -125,7 +147,11 @@ export class OwnerPromptBroker {
 			// Um prazo que não segura o processo aberto.
 			timer.unref?.();
 			this.pending = { prompt, resolve, timer };
-			this.send(prompt);
+			// Sem janela, não há quem responda: fecha já, em vez de prender a
+			// ação até o prazo. O `finish` limpa o pendente e o timer.
+			if (!this.send(prompt)) {
+				this.finish({ kind: 'rejected', reason: 'não há janela aberta para mostrar a pergunta de autorização' });
+			}
 		});
 	}
 

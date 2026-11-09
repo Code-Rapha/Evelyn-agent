@@ -26,6 +26,7 @@ function broker(): { instance: OwnerPromptBroker; published: OwnerPrompt[] } {
 	const instance = new OwnerPromptBroker(
 		(prompt: OwnerPrompt) => {
 			published.push(prompt);
+			return true;
 		},
 		{ ttlMs: 5_000 },
 	);

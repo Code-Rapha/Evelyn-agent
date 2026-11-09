@@ -240,6 +240,7 @@ suite('Desktop: bridge contract', () => {
 				throw new Error('sem credencial local');
 			},
 			onDevOwnerPrompt: () => () => undefined,
+			pendingDevOwnerPrompt: async () => null,
 			answerDevOwnerPrompt: async () => ({ accepted: false, reason: 'não há pergunta aberta' }),
 			// R4C: conversa pelo serviço. Só transporte; o turno roda nele.
 			sendToService: async () => ({ accepted: false, error: 'sem serviço' }),
@@ -384,6 +385,7 @@ suite('Desktop: bridge contract', () => {
 			'configureDevAuthorization',
 			'recoverDevAuthorization',
 			'onDevOwnerPrompt',
+			'pendingDevOwnerPrompt',
 			'answerDevOwnerPrompt',
 			// R4C: a conversa pelo serviço. Transporte: o turno roda no motor
 			// do serviço, não aqui.

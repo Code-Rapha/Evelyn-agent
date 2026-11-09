@@ -51,6 +51,7 @@ import {
 	DEV_CHANNEL,
 	DEV_EVENT_CHANNEL,
 	DEV_OWNER_PROMPT_CHANNEL,
+	DEV_OWNER_PENDING_CHANNEL,
 	DEV_OWNER_ANSWER_CHANNEL,
 	type DevOwnerPromptView,
 	type DevOwnerPromptAnswerView,
@@ -1363,6 +1364,20 @@ const bridge: SeshyinaBridge = Object.freeze({
 			removed = true;
 			ipcRenderer.removeListener(DEV_OWNER_PROMPT_CHANNEL, handler);
 		};
+	},
+
+	/**
+	 * DEV-10: a pergunta aberta, para quem chegar depois do evento.
+	 *
+	 * A janela criada para a pergunta pode estar montando quando o evento
+	 * sai; consultar ao montar evita depender da ordem entre os dois.
+	 */
+	async pendingDevOwnerPrompt() {
+		try {
+			return (await ipcRenderer.invoke(DEV_OWNER_PENDING_CHANNEL)) as DevOwnerPromptView | null;
+		} catch (error) {
+			rethrow(error);
+		}
 	},
 
 	/** DEV-7: responde ao pedido aberto. */

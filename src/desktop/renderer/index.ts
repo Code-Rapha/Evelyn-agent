@@ -59,7 +59,7 @@ import {
 } from '../contract';
 import type { DevRunHistoryView } from '../devView';
 import type { DevPanelState } from '../../core/dev/devPanel';
-import type { DevOwnerPromptAnswerView } from '../contract';
+import type { DevOwnerPromptAnswerView, DevOwnerPromptView } from '../contract';
 import {
 	describeAccessLine,
 	describeComparison,
@@ -6297,6 +6297,90 @@ function confirmDevAction(question: string): Promise<boolean> {
 	});
 }
 
+/**
+ * Ouve a pergunta de autorização do host (DEV-10).
+ *
+ * Registrado no início de `main()`, antes de qualquer `await`: a pergunta
+ * pode chegar enquanto a página ainda monta o resto, e um evento sem ouvinte
+ * é um evento perdido — a ação DEV espera então o prazo inteiro de validade.
+ * É idempotente no preload (um ouvinte por chamada), então quem chama
+ * `bindDevPanel` de novo não duplica o diálogo.
+ */
+function bindDevOwnerPrompt(bridge: SeshyinaBridge): void {
+	bridge.onDevOwnerPrompt((prompt) => {
+		drawDevOwnerPrompt(prompt);
+	});
+	// A janela pode ter sido criada **por causa** desta pergunta e terminar de
+	// montar depois do evento. Perguntar pelo que está aberto fecha a corrida
+	// nos dois sentidos: se a pergunta ainda vale, ela é desenhada agora; se
+	// já foi respondida ou expirou, não há nada a mostrar.
+	void bridge
+		.pendingDevOwnerPrompt()
+		.then((prompt) => {
+			if (prompt !== null && prompt !== undefined) {
+				drawDevOwnerPrompt(prompt);
+			}
+		})
+		.catch(() => undefined);
+}
+
+/**
+ * Desenha a pergunta de autorização e leva a pessoa até ela.
+ *
+ * O diálogo mora **dentro** da seção DEV, e `setActiveSection` esconde a
+ * seção inteira. Chegando com outra seção aberta, ele pousaria num ancestral
+ * `hidden` — aberto no host, invisível na tela. Medido no pacote: a janela
+ * de configurações abria na seção "providers" e o cartão ficava com
+ * `width: 0`, escondido pelo `panel[data-section="dev"]`.
+ *
+ * A pessoa pediu uma ação DEV; mostrar a seção onde a pergunta vive é parte
+ * de atender o pedido, não uma navegação que ela não pediu.
+ */
+function drawDevOwnerPrompt(prompt: DevOwnerPromptView): void {
+	setActiveSection('dev');
+	const box = byId('dev-owner-prompt');
+	box.hidden = false;
+	box.dataset['id'] = prompt.id;
+	box.dataset['kind'] = prompt.kind;
+	byId('dev-owner-title').textContent = prompt.title;
+	byId('dev-owner-detail').textContent = prompt.detail;
+	// DEV-9.1: a pergunta de comando mostra os fatos e **esconde** o campo
+	// de senha — não há credencial a digitar, e um campo vazio sugeriria
+	// que existe.
+	const isCommand = prompt.kind === 'run-command';
+	const facts = byId('dev-command-facts');
+	facts.hidden = !isCommand;
+	byId('dev-owner-password-wrap').hidden = isCommand;
+	if (isCommand) {
+		const detail = prompt.detail;
+		const pick = (label: string): string => {
+			const match = new RegExp(`^${label}:\\s*(.+)$`, 'm').exec(detail);
+			return match?.[1]?.trim() ?? '—';
+		};
+		byId('dev-command-text').textContent = pick('Comando');
+		byId('dev-command-cwd').textContent = pick('Diretório');
+		byId('dev-command-scope').textContent = pick('Escopo');
+	}
+	byId('dev-owner-confirmation-wrap').hidden = prompt.kind !== 'configure';
+	// A caixa de lembrança só existe quando o host oferece o desbloqueio —
+	// e só no pedido de autorização, nunca ao configurar/trocar a senha.
+	const rememberWrap = byId('dev-owner-remember-wrap');
+	const canRemember = prompt.kind === 'authorize' && prompt.canRemember === true;
+	rememberWrap.hidden = !canRemember;
+	byId<HTMLInputElement>('dev-owner-remember').checked = false;
+	byId<HTMLInputElement>('dev-owner-password').value = '';
+	byId<HTMLInputElement>('dev-owner-confirmation').value = '';
+	byId('dev-owner-submit').textContent =
+		prompt.kind === 'configure' ? 'Configurar' : prompt.kind === 'run-command' ? 'Executar' : 'Autorizar';
+	// Foco: o campo de senha quando há um; no cartão de comando, o botão de
+	// executar (não há campo para focar, e um Enter teria de cair nele).
+	if (isCommand) {
+		byId<HTMLButtonElement>('dev-owner-submit').focus();
+	} else {
+		byId<HTMLInputElement>('dev-owner-password').focus();
+	}
+}
+
 function bindDevPanel(bridge: SeshyinaBridge): void {
 	const run = async (action: () => Promise<unknown>): Promise<void> => {
 		try {
@@ -6403,49 +6487,10 @@ function bindDevPanel(bridge: SeshyinaBridge): void {
 		void run(() => bridge.recoverDevAuthorization());
 	});
 
-	bridge.onDevOwnerPrompt((prompt) => {
-		const box = byId('dev-owner-prompt');
-		box.hidden = false;
-		box.dataset['id'] = prompt.id;
-		box.dataset['kind'] = prompt.kind;
-		byId('dev-owner-title').textContent = prompt.title;
-		byId('dev-owner-detail').textContent = prompt.detail;
-		// DEV-9.1: a pergunta de comando mostra os fatos e **esconde** o campo
-		// de senha — não há credencial a digitar, e um campo vazio sugeriria
-		// que existe.
-		const isCommand = prompt.kind === 'run-command';
-		const facts = byId('dev-command-facts');
-		facts.hidden = !isCommand;
-		byId('dev-owner-password-wrap').hidden = isCommand;
-		if (isCommand) {
-			const detail = prompt.detail;
-			const pick = (label: string): string => {
-				const match = new RegExp(`^${label}:\\s*(.+)$`, 'm').exec(detail);
-				return match?.[1]?.trim() ?? '—';
-			};
-			byId('dev-command-text').textContent = pick('Comando');
-			byId('dev-command-cwd').textContent = pick('Diretório');
-			byId('dev-command-scope').textContent = pick('Escopo');
-		}
-		byId('dev-owner-confirmation-wrap').hidden = prompt.kind !== 'configure';
-		// A caixa de lembrança só existe quando o host oferece o desbloqueio —
-		// e só no pedido de autorização, nunca ao configurar/trocar a senha.
-		const rememberWrap = byId('dev-owner-remember-wrap');
-		const canRemember = prompt.kind === 'authorize' && prompt.canRemember === true;
-		rememberWrap.hidden = !canRemember;
-		byId<HTMLInputElement>('dev-owner-remember').checked = false;
-		byId<HTMLInputElement>('dev-owner-password').value = '';
-		byId<HTMLInputElement>('dev-owner-confirmation').value = '';
-		byId('dev-owner-submit').textContent =
-			prompt.kind === 'configure' ? 'Configurar' : prompt.kind === 'run-command' ? 'Executar' : 'Autorizar';
-		// Foco: o campo de senha quando há um; no cartão de comando, o botão de
-		// executar (não há campo para focar, e um Enter teria de cair nele).
-		if (isCommand) {
-			byId<HTMLButtonElement>('dev-owner-submit').focus();
-		} else {
-			byId<HTMLInputElement>('dev-owner-password').focus();
-		}
-	});
+	// DEV-10: o ouvinte da pergunta de autorização **não** é inscrito aqui —
+	// `main()` já o fez antes de qualquer `await`, e o preload registra um
+	// `ipcRenderer` por chamada: uma segunda inscrição desenharia o diálogo
+	// duas vezes.
 
 	const answerPrompt = async (answer: DevOwnerPromptAnswerView): Promise<void> => {
 		hide(byId('dev-owner-prompt'));
@@ -7076,6 +7121,15 @@ async function main(): Promise<void> {
 	}
 
 	bindEvents(state.bridge);
+	// DEV-10: o ouvinte da pergunta de autorização fica de pé **antes de
+	// qualquer `await`**. Ele morava no `bindDevPanel`, que roda ao fim da
+	// carga — depois de projetos, modo do Core, serviço e modelos. Medido no
+	// pacote: a janela de configurações abria "não carregando" e a pergunta
+	// chegava nesse intervalo, antes do ouvinte existir; o evento se perdia e
+	// a ação esperava os 120 s de validade. A pergunta é um pedido para
+	// **esta** página: ela não pode depender de a página ter terminado de
+	// montar o resto.
+	bindDevOwnerPrompt(state.bridge);
 	// DEV-8.9: o modo é escolha desta janela. Lido antes do primeiro desenho,
 	// para o seletor e o compositor já abrirem no modo em que a pessoa deixou.
 	state.turnMode = readStoredTurnMode(window.localStorage);

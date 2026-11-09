@@ -141,7 +141,10 @@ async function host(
 		}
 	}
 	const sent: OwnerPrompt[] = [];
-	const prompts = new OwnerPromptBroker((prompt) => sent.push(prompt));
+	const prompts = new OwnerPromptBroker((prompt) => {
+		sent.push(prompt);
+		return true;
+	});
 	const created = new DevHost({
 		repositoryRoot: made.repo,
 		dataRoot: made.data,

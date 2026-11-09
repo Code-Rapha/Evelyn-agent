@@ -90,6 +90,13 @@ export const DEV_EVENT_CHANNEL = 'seshyina:dev-event';
 export const DEV_OWNER_PROMPT_CHANNEL = 'seshyina:dev-owner-prompt';
 /** DEV-7: a resposta à pergunta de autorização. */
 export const DEV_OWNER_ANSWER_CHANNEL = 'seshyina:dev-owner-answer';
+/**
+ * DEV-10: a pergunta aberta agora, lida por quem chega depois do evento.
+ *
+ * A janela criada **para** a pergunta pode estar montando quando o evento
+ * sai, e um ouvinte inscrito depois não recebe o que já passou.
+ */
+export const DEV_OWNER_PENDING_CHANNEL = 'seshyina:dev-owner-pending';
 
 /**
  * O que a janela recebe ao abrir, depois de uma recarga ou reinício (DEV-4).
@@ -1242,6 +1249,15 @@ export interface SeshyinaBridge {
 	recoverDevAuthorization(): Promise<DevPanelState>;
 	/** O prompt de autorização que o host abriu, se houver. */
 	onDevOwnerPrompt(listener: (prompt: DevOwnerPromptView) => void): () => void;
+	/**
+	 * A pergunta aberta agora, ou `null`.
+	 *
+	 * Existe porque uma janela criada **para** a pergunta pode estar montando
+	 * quando o evento sai: sem esta leitura, o evento chega antes do ouvinte
+	 * e a pergunta só aparecia ao expirar. Quem desenha consulta isto ao
+	 * montar.
+	 */
+	pendingDevOwnerPrompt(): Promise<DevOwnerPromptView | null>;
 	/** Responde ao prompt aberto (a única forma de a senha sair do formulário). */
 	answerDevOwnerPrompt(answer: DevOwnerPromptAnswerView): Promise<{ readonly accepted: boolean; readonly reason?: string }>;
 	/**
