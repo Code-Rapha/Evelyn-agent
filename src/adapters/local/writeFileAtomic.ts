@@ -9,6 +9,10 @@
  *
  * A failed `rename` removes the temp and rethrows: the destination still
  * holds the previous content, so the caller's error costs nothing on disk.
+ *
+ * A sharing violation on the destination — a reader holding it open, common on
+ * Windows — is retried once before the error is reported: the destination was
+ * never truncated, so the second attempt starts from the same place.
  */
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -30,16 +34,39 @@ export async function writeFileAtomic(
 	options: WriteFileAtomicOptions = {},
 ): Promise<void> {
 	await mkdir(dirname(filePath), { recursive: true });
-	sequence += 1;
-	const temp = `${filePath}.${process.pid}.${sequence}.tmp`;
-	await writeFile(temp, contents, {
-		encoding: 'utf8',
-		...(options.mode !== undefined ? { mode: options.mode } : {}),
-	});
+	const target = filePath;
+	const write = async (): Promise<void> => {
+		sequence += 1;
+		const temp = `${target}.${process.pid}.${sequence}.tmp`;
+		await writeFile(temp, contents, {
+			encoding: 'utf8',
+			...(options.mode !== undefined ? { mode: options.mode } : {}),
+		});
+		try {
+			await rename(temp, target);
+		} catch (error) {
+			await rm(temp, { force: true }).catch(() => undefined);
+			throw error;
+		}
+	};
 	try {
-		await rename(temp, filePath);
+		await write();
 	} catch (error) {
-		await rm(temp, { force: true }).catch(() => undefined);
-		throw error;
+		if (!isSharingViolation(error)) {
+			throw error;
+		}
+		// One short wait, then a single retry. A lock that outlives it is a
+		// real failure and is reported as such, not hidden behind a loop.
+		await new Promise((resolve) => setTimeout(resolve, 15));
+		await write();
 	}
+}
+
+/** `EBUSY`/`EPERM` from `rename` on Windows: another handle has the file open. */
+function isSharingViolation(error: unknown): boolean {
+	if (typeof error !== 'object' || error === null) {
+		return false;
+	}
+	const code = (error as { readonly code?: unknown }).code;
+	return code === 'EBUSY' || code === 'EPERM';
 }

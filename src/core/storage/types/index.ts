@@ -16,7 +16,9 @@
  *
  * 2. `DataStore` (in `./dataStore`) — the local persistence port for projects,
  *    conversation history and non-sensitive configuration, which *is*
- *    implemented, by `adapters/local/fileDataStore`.
+ *    implemented, by `adapters/local/fileDataStore`. It extends
+ *    `ModelCatalogPort` (in `./modelCatalog`), the user's own record of what each
+ *    connected model costs and is good for, alongside what real runs measured.
  *
  * Future services must depend on these abstractions instead of touching
  * arbitrary filesystem paths or `fs` directly.

@@ -1,3 +1,5 @@
+import { type TokenUsage } from './types';
+
 /**
  * SSE parsing for OpenAI-compatible streams.
  *
@@ -105,6 +107,14 @@ export interface ChatCompletionChunk {
 	 * user had asked for it.
 	 */
 	readonly reasoning: string;
+	/**
+	 * Present only when the chunk carried a `usage` object.
+	 *
+	 * `undefined` rather than an empty object when the chunk had none: that is
+	 * the difference between "the server reported nothing" and "the server
+	 * reported zero", and only the first is knowable from an absent field.
+	 */
+	readonly usage?: TokenUsage;
 	readonly toolCalls: readonly {
 		readonly index: number;
 		readonly id?: string;
@@ -112,6 +122,77 @@ export interface ChatCompletionChunk {
 		readonly arguments?: string;
 	}[];
 	readonly finishReason?: string;
+	/**
+	 * The model the server says answered.
+	 *
+	 * Present only when the response published it. That is the difference
+	 * between knowing which model a **router** chose and not knowing: a
+	 * router may answer with a different model than the one requested, and
+	 * the server's own `model` field is the only statement about it that
+	 * exists. Absent means the server said nothing, not that the requested
+	 * model answered.
+	 */
+	readonly model?: string;
+}
+
+/**
+ * Reads a `usage` object off a response.
+ *
+ * Shape confirmed against a live `api.atria-asi.ai` response:
+ *
+ *   {"prompt_tokens":18,"completion_tokens":16,"total_tokens":34,
+ *    "completion_tokens_details":{"reasoning_tokens":16,"audio_tokens":null,
+ *     "accepted_prediction_tokens":null,"rejected_prediction_tokens":null},
+ *    "prompt_tokens_details":null}
+ *
+ * Every field is read defensively and anything unrecognised is dropped rather
+ * than coerced. A negative, fractional or non-numeric token count is a server
+ * that means something else by the field, and recording it as a number would
+ * put it straight into a cost total. Nothing is inferred: `total` is never
+ * summed up from the other two, because a server that omits `total_tokens` has
+ * not said what the total is.
+ *
+ * Returns undefined when the object is absent or carries no usable number, so
+ * "not reported" and "reported as zero" stay distinguishable.
+ */
+export function parseUsage(value: unknown): TokenUsage | undefined {
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+		return undefined;
+	}
+	const source = value as {
+		prompt_tokens?: unknown;
+		completion_tokens?: unknown;
+		total_tokens?: unknown;
+		completion_tokens_details?: { reasoning_tokens?: unknown } | null;
+		prompt_tokens_details?: { cached_tokens?: unknown } | null;
+	};
+
+	const count = (input: unknown): number | undefined =>
+		typeof input === 'number' && Number.isInteger(input) && input >= 0 ? input : undefined;
+
+	const promptTokens = count(source.prompt_tokens);
+	const completionTokens = count(source.completion_tokens);
+	const totalTokens = count(source.total_tokens);
+	const reasoningTokens = count(source.completion_tokens_details?.reasoning_tokens);
+	const cachedInputTokens = count(source.prompt_tokens_details?.cached_tokens);
+
+	if (
+		promptTokens === undefined &&
+		completionTokens === undefined &&
+		totalTokens === undefined &&
+		reasoningTokens === undefined &&
+		cachedInputTokens === undefined
+	) {
+		return undefined;
+	}
+
+	return {
+		...(promptTokens !== undefined ? { promptTokens } : {}),
+		...(completionTokens !== undefined ? { completionTokens } : {}),
+		...(totalTokens !== undefined ? { totalTokens } : {}),
+		...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+		...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+	};
 }
 
 /**
@@ -134,9 +215,25 @@ export function parseChatChunk(payload: string): ChatCompletionChunk | undefined
 	if (typeof parsed !== 'object' || parsed === null) {
 		return undefined;
 	}
+
+	// Read `usage` before the choices, because the chunk that carries it is the
+	// one with no choices at all: a server asked for streamed usage answers the
+	// final event as `{"choices":[],"usage":{…}}`. Returning early on empty
+	// choices — which is the right behaviour for a keepalive — would throw that
+	// last chunk away, and it is the only one that ever says what the request
+	// cost.
+	const usage = parseUsage((parsed as { usage?: unknown }).usage);
+	// O `model` que o servidor publica. Num roteador, ele pode ser diferente do
+	// modelo pedido — e é a única afirmação que existe sobre qual respondeu.
+	const publishedModel = (parsed as { model?: unknown }).model;
+	const model = typeof publishedModel === 'string' && publishedModel.length > 0 ? publishedModel : undefined;
+
 	const choices = (parsed as { choices?: unknown }).choices;
 	if (!Array.isArray(choices) || choices.length === 0) {
-		return undefined;
+		// A keepalive stays nothing to report; a usage-only chunk stays a chunk.
+		return usage === undefined
+			? undefined
+			: { text: '', reasoning: '', usage, toolCalls: [], ...(model !== undefined ? { model } : {}) };
 	}
 
 	const first = choices[0] as {
@@ -177,7 +274,9 @@ export function parseChatChunk(payload: string): ChatCompletionChunk | undefined
 		text,
 		reasoning,
 		toolCalls,
+		...(usage !== undefined ? { usage } : {}),
 		...(finishReason !== undefined ? { finishReason } : {}),
+		...(model !== undefined ? { model } : {}),
 	};
 }
 

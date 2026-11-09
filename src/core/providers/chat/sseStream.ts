@@ -13,24 +13,101 @@
  */
 import { SseDecoder, SSE_DONE, parseChatChunk } from './sse';
 import type { ByteStreamLike } from '../openaiCompatible';
-import type { ChatStream, ChatStreamEvent } from './types';
+import type { ChatStream, ChatStreamEvent, StreamTiming } from './types';
 
 /** Yields SSE events from a byte stream, mapping them onto chat events. */
 export class SseChatStream implements ChatStream {
 	private ended = false;
 	private iterator: AsyncIterator<Uint8Array | string> | undefined;
 	private reason: ChatStream['closedReason'] = 'completed';
+	/** Injected so the timings are assertable without a real clock. */
+	private readonly clock: () => number;
+	private readonly requestedAt: number;
+	private readonly headersMs: number;
+	private firstTokenMs: number | undefined;
+	/** Retained for the catalog; see `StreamTiming.firstByteMs`. */
+	private readonly firstByteMs: number | undefined;
+	private totalMs: number | undefined;
+	/** The model the server published, when it published one. */
+	private answeredModel: string | undefined;
 
+	/**
+	 * @param options.requestedAt
+	 *   When the caller sent the request, from the same clock. The wait for the
+	 *   response headers happens *before* this object exists, so measuring from
+	 *   construction instead would report the generation time and call it the
+	 *   whole request — and a total that excludes the connection is the one
+	 *   number that looks healthy while the connection is what is slow.
+	 * @param options.now
+	 *   The clock, so tests can assert the timings rather than sleep for them.
+	 */
 	constructor(
 		private readonly body: ByteStreamLike,
 		private readonly signal?: AbortSignal,
-	) {}
+		private readonly options: {
+			readonly requestedAt?: number;
+			readonly now?: () => number;
+			/** Response headers, lower-cased. Read for rate limits; never stored raw. */
+			readonly headers?: Readonly<Record<string, string>>;
+		} = {},
+	) {
+		this.clock = options.now ?? Date.now;
+		this.requestedAt = options.requestedAt ?? this.clock();
+		// Derived here, at the one moment it is true: the response exists and
+		// nothing has been read from it yet. This is the time to the *headers*,
+		// not to any body byte — reading it as "the model started answering" is
+		// exactly the confusion `firstTokenMs` exists to prevent.
+		const responseAt = this.clock();
+		this.headersMs = responseAt - this.requestedAt;
+		this.firstByteMs = this.headersMs;
+	}
 
 	get closedReason(): ChatStream['closedReason'] {
 		return this.reason;
 	}
 
-	async *[Symbol.asyncIterator](): AsyncIterator<ChatStreamEvent> {
+	/** The rate-limit headers the response carried, when any. */
+	get responseHeaders(): Readonly<Record<string, string>> {
+		return this.options.headers ?? {};
+	}
+
+	/**
+	 * The model the server said answered, when it said.
+	 *
+	 * Absent means the server published nothing — not that the requested
+	 * model answered. On a router the two are different, and the difference is
+	 * the whole point.
+	 */
+	get respondedModel(): string | undefined {
+		return this.answeredModel;
+	}
+	get timing(): StreamTiming {
+		return {
+			headersMs: this.headersMs,
+			...(this.firstTokenMs !== undefined ? { firstTokenMs: this.firstTokenMs } : {}),
+			...(this.firstByteMs !== undefined ? { firstByteMs: this.firstByteMs } : {}),
+			...(this.totalMs !== undefined ? { totalMs: this.totalMs } : {}),
+		};
+	}
+
+	/**
+	 * Wraps the generator so the total is recorded on every way out.
+	 *
+	 * `finally` rather than a statement inside the generator, because there are
+	 * five ways a stream ends — completed, aborted, failed, the body closing with
+	 * no marker, and the consumer walking away early — and the last two are
+	 * returns from the middle of the generator. Setting it in one place is the
+	 * only way none of them can be missed.
+	 */
+	async *[Symbol.asyncIterator](): AsyncGenerator<ChatStreamEvent> {
+		try {
+			yield* this.generate();
+		} finally {
+			this.totalMs = this.clock() - this.requestedAt;
+		}
+	}
+
+	private async *generate(): AsyncGenerator<ChatStreamEvent> {
 		const source = this.body[Symbol.asyncIterator];
 		if (source === undefined) {
 			this.reason = 'failed';
@@ -184,6 +261,12 @@ export class SseChatStream implements ChatStream {
 		}
 
 		const events: ChatStreamEvent[] = [];
+		// O `model` que o servidor publica. Num roteador, ele pode ser
+		// diferente do pedido — e é a única afirmação existente sobre qual
+		// respondeu.
+		if (chunk.model !== undefined) {
+			this.answeredModel = chunk.model;
+		}
 		// Reasoning first: a chunk carrying both is ordered thinking-then-answer by
 		// every server that sends both, so this keeps that order.
 		if (chunk.reasoning.length > 0) {
@@ -191,6 +274,16 @@ export class SseChatStream implements ChatStream {
 		}
 		if (chunk.text.length > 0) {
 			events.push({ type: 'TextDelta', text: chunk.text });
+		}
+		if (chunk.reasoning.length > 0 || chunk.text.length > 0) {
+			this.markFirstToken();
+		}
+		if (chunk.usage !== undefined) {
+			// Emitted wherever it appears, which for a streamed response is the
+			// final chunk. A server that never sends one produces no `Usage` event
+			// at all, and that absence is the signal — it is not filled in with a
+			// zero, which would read as a free request.
+			events.push({ type: 'Usage', usage: chunk.usage });
 		}
 		for (const call of chunk.toolCalls) {
 			const pending = pendingToolCalls.get(call.index) ?? { arguments: '' };
@@ -246,9 +339,26 @@ export class SseChatStream implements ChatStream {
 					arguments: call.arguments,
 				},
 			});
+			// A tool call is the model's first answer too. Marked here rather
+			// than only on text, so a model that opens with a call is measured
+			// at the call rather than reported as never having started.
+			this.markFirstToken();
 		}
 		pending.clear();
 		return events;
+	}
+
+	/**
+	 * Records the wait for the first content token, once.
+	 *
+	 * The earliest of text, reasoning and a tool call: from the caller's side
+	 * all three mean "the model began to answer", and taking a later one would
+	 * report a latency the user did not experience.
+	 */
+	private markFirstToken(): void {
+		if (this.firstTokenMs === undefined) {
+			this.firstTokenMs = this.clock() - this.requestedAt;
+		}
 	}
 
 	/** Releases the underlying reader. Safe to call more than once. */
@@ -280,7 +390,19 @@ export class AbortedChatStream implements ChatStream {
 		return 'aborted';
 	}
 
-	async *[Symbol.asyncIterator](): AsyncIterator<ChatStreamEvent> {
+	/**
+	 * Empty rather than zeroed.
+	 *
+	 * There was no request that reached a response, so there is no first byte
+	 * and no total to report. `{}` is the honest answer; a zero would read as an
+	 * instantaneous reply and be averaged into a latency figure as though it
+	 * meant something.
+	 */
+	get timing(): StreamTiming {
+		return {};
+	}
+
+	async *[Symbol.asyncIterator](): AsyncGenerator<ChatStreamEvent> {
 		// An aborted-before-start stream yields nothing and simply ends.
 		return;
 	}
@@ -318,10 +440,26 @@ export function buildChatRequestBody(request: {
 		readonly parameters: Readonly<Record<string, unknown>>;
 	}[];
 	readonly stream?: boolean;
+	readonly maxTokens?: number;
 }): Record<string, unknown> {
 	const body: Record<string, unknown> = {
 		model: request.model,
-		messages: request.messages.map((message) => ({
+		messages: request.messages
+			// A tool result may not be followed directly by a user message on
+			// stricter OpenAI-compatible servers. Preserve both by inserting the
+			// assistant continuation that an uninterrupted round-trip would have
+			// produced, rather than dropping the user or the tool result.
+			.reduce((ordered, message) => {
+				if (
+					ordered.length > 0 &&
+					ordered[ordered.length - 1].role === 'tool' &&
+					message.role === 'user'
+				) {
+					ordered.push({ role: 'assistant', content: '' });
+				}
+				ordered.push(message);
+				return ordered;
+			}, [] as (typeof request.messages)[number][]).map((message) => ({
 			role: message.role,
 			content: message.content,
 			...(message.toolCallId !== undefined ? { tool_call_id: message.toolCallId } : {}),
@@ -336,6 +474,7 @@ export function buildChatRequestBody(request: {
 			message.toolCalls.length > 0
 				? {
 						tool_calls: message.toolCalls.map((call) => ({
+							id: call.id,
 							type: 'function',
 							function: { name: call.name, arguments: call.arguments },
 						})),
@@ -356,6 +495,12 @@ export function buildChatRequestBody(request: {
 			},
 		}));
 		body.tool_choice = 'auto';
+	}
+	// Sent only when the caller asked for a bound. A default here would apply
+	// to every real turn, and silently truncating an answer is worse than
+	// letting the server choose.
+	if (request.maxTokens !== undefined) {
+		body.max_tokens = request.maxTokens;
 	}
 	return body;
 }

@@ -31,15 +31,47 @@ export interface ConsoleLogSinkOptions {
 	readonly err?: (line: string) => void;
 }
 
+/** Um destino já morto, por stream. O erro de pipe é permanente. */
+const deadStreams = new WeakSet<object>();
+
+/**
+ * Escreve uma linha sem derrubar o app quando a saída não existe mais.
+ *
+ * O `write` de um stream de processo entrega a falha como **evento** `error`,
+ * não como exceção — e sem handler o Node a lança e derruba o processo
+ * principal. Foi o que exibiu "A JavaScript error occurred in the main
+ * process: EPIPE" ao abrir o app por um shell que soltou o handle do pipe.
+ *
+ * Perder uma linha de log é aceitável; perder o processo inteiro por causa
+ * dela não é. O handler é instalado uma vez, silencia qualquer erro do
+ * stream (não há a quem reportá-lo) e marca o destino como morto para não
+ * tentar de novo a cada linha.
+ */
+export function writeToStream(stream: NodeJS.WriteStream, line: string): void {
+	if (deadStreams.has(stream)) {
+		return;
+	}
+	if (stream.listenerCount('error') === 0) {
+		stream.on('error', () => {
+			deadStreams.add(stream);
+		});
+	}
+	try {
+		stream.write(`${line}\n`);
+	} catch {
+		deadStreams.add(stream);
+	}
+}
+
 export class ConsoleLogSink implements LogSink {
 	private readonly prefix: string;
 	private readonly out: (line: string) => void;
 	private readonly err: (line: string) => void;
 
 	constructor(options: ConsoleLogSinkOptions = {}) {
-		this.prefix = options.prefix ?? '[seshyina]';
-		this.out = options.out ?? ((line: string) => void process.stdout.write(`${line}\n`));
-		this.err = options.err ?? ((line: string) => void process.stderr.write(`${line}\n`));
+		this.prefix = options.prefix ?? '[evelyn]';
+		this.out = options.out ?? ((line: string) => writeToStream(process.stdout, line));
+		this.err = options.err ?? ((line: string) => writeToStream(process.stderr, line));
 	}
 
 	log(entry: LogEntry): void {

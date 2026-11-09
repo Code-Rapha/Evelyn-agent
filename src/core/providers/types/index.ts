@@ -7,6 +7,8 @@
  * future capability and is NOT implemented in this phase.
  */
 
+import type { ModelCapabilities } from '../../storage/types/modelCatalog';
+
 export type ProviderType = 'predefined' | 'custom-openai-compatible';
 
 export type ProviderStatus =
@@ -29,6 +31,30 @@ export interface ModelInfo {
 	readonly name: string;
 	readonly contextWindow?: number;
 	readonly capabilities?: readonly ProviderCapability[];
+	/**
+	 * What the endpoint published about this model in the same listing.
+	 *
+	 * Absent on a server that only publishes ids, which is the common case.
+	 * Nothing here is derived: a price the server did not state stays absent.
+	 */
+	readonly pricing?: {
+		readonly currency: string;
+		readonly unit: 'per_1k_tokens' | 'per_1m_tokens';
+		readonly input?: number;
+		readonly output?: number;
+	};
+	/** When the provider's catalog picked this model up, ISO-8601, when published. */
+	readonly created?: string;
+	/** The response budget the provider published, when it publishes one. */
+	readonly maxOutputTokens?: number;
+	/**
+	 * The capabilities the provider published, when it publishes a list.
+	 *
+	 * Absent means the provider said nothing about them - not that the model
+	 * lacks them. A field inside is `false` only when the provider's own
+	 * enumeration says so.
+	 */
+	readonly modelCapabilities?: ModelCapabilities;
 }
 
 /**
