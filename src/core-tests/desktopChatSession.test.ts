@@ -25,7 +25,16 @@ import { FileSecretStore } from '../adapters/local/fileSecretStore';
 import { FileStateStore } from '../adapters/local/fileStateStore';
 import { ChatSession, deriveProviderId } from '../desktop/chatSession';
 import type { AgentUiEvent } from '../desktop/agentTurn';
-import { parseProviderSummary, type SendMessageInput } from '../desktop/contract';
+import { shouldFallback } from '../desktop/modelSelector';
+import { continueOrchestration } from '../desktop/orchestrator';
+import type { SelectableModel } from '../desktop/modelSelector';
+import {
+	parseChatStreamEvent,
+	parseProviderSummary,
+	type SendMessageInput,
+} from '../desktop/contract';
+import { SESHYINA_AGENT_IDENTITY } from '../core/agent/seshyinaAgent';
+import { removeFixtureTree } from '../test-support/removeFixtureTree';
 
 const KEY = 'sk-test-DO-NOT-PERSIST-9c1e2b';
 const LOCAL_URL = 'http://127.0.0.1:11434/v1';
@@ -93,8 +102,25 @@ function scriptedFetch(chunks: readonly string[]): { fetchImpl: FetchLike; calls
 	return { fetchImpl, calls };
 }
 
-/** Collects stream events and lets a test await the turn's terminal event. */
-class EventLog {
+/** A model the selector could have returned, for the orchestration tests. */
+function selectable(providerId: string, modelId: string): SelectableModel {
+	return {
+		providerId,
+		modelId,
+		providerName: providerId,
+		available: true,
+		catalog: {
+			providerId,
+			modelId,
+			access: 'unknown',
+			observations: [],
+			createdAt: '2024-01-01T00:00:00.000Z',
+			updatedAt: '2024-01-01T00:00:00.000Z',
+		},
+	};
+}
+
+/** Collects stream events and lets a test await the turn's terminal event. */class EventLog {
 	readonly events: AgentUiEvent[] = [];
 	private finished: (() => void) | undefined;
 
@@ -182,13 +208,13 @@ suite('Desktop: chat session', () => {
 	});
 
 	teardown(async () => {
-		await rm(root, { recursive: true, force: true });
+		await removeFixtureTree(root);
 	});
 
 	/** A session over fresh temp files. Everything is real except `fetch`. */
 	function session(
 		fetchImpl?: FetchLike,
-		options: { readonly turnTimeoutMs?: number } = {},
+		options: { readonly turnTimeoutMs?: number; readonly firstTokenTimeoutMs?: number } = {},
 	): ChatSession {
 		return new ChatSession({
 			config: new ProviderConfigService(new FileStateStore({ filePath: join(root, 'state.json') })),
@@ -199,6 +225,9 @@ suite('Desktop: chat session', () => {
 			),
 			...(fetchImpl !== undefined ? { fetchImpl } : {}),
 			...(options.turnTimeoutMs !== undefined ? { turnTimeoutMs: options.turnTimeoutMs } : {}),
+			...(options.firstTokenTimeoutMs !== undefined
+				? { firstTokenTimeoutMs: options.firstTokenTimeoutMs }
+				: {}),
 		});
 	}
 
@@ -539,10 +568,136 @@ suite('Desktop: chat session', () => {
 			(event) => event.type === 'done' || event.type === 'error',
 		);
 		assert.strictEqual(terminals.length, 1, 'exactly one terminal event');
-		assert.strictEqual(log.terminal.type, 'done');
-		assert.strictEqual(log.terminal.type === 'done' ? log.terminal.reason : '', 'aborted');
+		// A timeout is a failure the user can act on, so it is reported as an
+		// error that names the cause — not as a bare "stopped".
+		assert.strictEqual(log.terminal.type, 'error');
+		assert.match(
+			log.terminal.type === 'error' ? log.terminal.message : '',
+			/excedeu 0s no total/,
+		);
 		assert.strictEqual(chat.isBusy, false, 'the session is not stuck after the timeout');
 		assert.strictEqual(chat.openPermissionCount, 0, 'no dialog outlives its turn');
+	});
+
+	/** A byte stream that produces nothing ever, but ends when aborted. */
+	function neverStream(signal?: AbortSignal): Exclude<FetchResponseLike['body'], null | undefined> {
+		const rejectAsAbort = (reject: (error: Error) => void): void =>
+			reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' }));
+		return {
+			[Symbol.asyncIterator]: () => ({
+				next: () =>
+					new Promise<IteratorResult<Uint8Array | string>>((_, reject) => {
+						if (signal?.aborted) {
+							rejectAsAbort(reject);
+							return;
+						}
+						signal?.addEventListener('abort', () => rejectAsAbort(reject), { once: true });
+					}),
+			}),
+		};
+	}
+
+	/** Serves `/models` and a POST stream that never sends a single byte. */
+	function stalledFetch(signalRef: { signal?: AbortSignal }): FetchLike {
+		return async (url, init) => {
+			signalRef.signal = init?.signal;
+			if (url.endsWith('/models')) {
+				return {
+					ok: true,
+					status: 200,
+					text: async () => JSON.stringify({ data: [{ id: 'llama3' }] }),
+				};
+			}
+			return { ok: true, status: 200, body: neverStream(init?.signal), text: async () => '' };
+		};
+	}
+
+	test('a stream that never emits its first token is aborted as a stall, with a clear message', async () => {
+		const signalRef: { signal?: AbortSignal } = {};
+		const chat = session(stalledFetch(signalRef), {
+			turnTimeoutMs: 5_000,
+			firstTokenTimeoutMs: 80,
+		});
+		await chat.saveProvider({ baseUrl: LOCAL_URL });
+		const log = new EventLog();
+
+		await chat.sendMessage(await sendInput(chat), log.sink);
+		await log.wait();
+
+		assert.strictEqual(log.terminal.type, 'error', 'the stall is an error, not a silent stop');
+		assert.match(
+			log.terminal.type === 'error' ? log.terminal.message : '',
+			/não começou a responder/,
+		);
+		assert.strictEqual(chat.isBusy, false, 'the session is free right after the stall');
+	});
+
+	test('a stream that stalls after outputting is cut by the turn timeout, not the stall timer', async () => {
+		const chat = session(async (_url, init) => {
+			let listener: (() => void) | undefined;
+			return {
+				ok: true,
+				status: 200,
+				body: {
+					[Symbol.asyncIterator]: () => ({
+						next: () => {
+							if (listener === undefined && init?.signal !== undefined) {
+								// One token arrives, then nothing — the stall timer is
+								// satisfied and the total-time timeout must take over.
+								return new Promise<IteratorResult<Uint8Array | string>>((resolve, reject) => {
+									listener = () =>
+										reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' }));
+									init?.signal?.addEventListener('abort', listener, { once: true });
+									resolve({ value: delta('começou'), done: false });
+								});
+							}
+							return new Promise<IteratorResult<Uint8Array | string>>((_, reject) => {
+								init?.signal?.addEventListener(
+									'abort',
+									() => reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })),
+									{ once: true },
+								);
+							});
+						},
+					}),
+				},
+				text: async () => '',
+			};
+		}, {
+			turnTimeoutMs: 200,
+			firstTokenTimeoutMs: 5_000,
+		});
+		await chat.saveProvider({ baseUrl: LOCAL_URL });
+		const log = new EventLog();
+
+		await chat.sendMessage(await sendInput(chat), log.sink);
+		await log.wait();
+
+		assert.notStrictEqual(log.deltas, '', 'the first token arrived before the stall');
+		assert.strictEqual(log.terminal.type, 'error');
+		assert.match(
+			log.terminal.type === 'error' ? log.terminal.message : '',
+			/excedeu 0s no total/,
+		);
+		assert.strictEqual(chat.isBusy, false);
+	});
+
+	test('a stop keeps reading as a stop: no cause is invented for it', async () => {
+		const chat = await readySession(async (url, init) => ({
+			ok: true,
+			status: 200,
+			body: neverStream(init?.signal),
+			text: async () => (url.endsWith('/models') ? JSON.stringify({ data: [{ id: 'llama3' }] }) : ''),
+		}));
+		const log = new EventLog();
+
+		await chat.sendMessage(await sendInput(chat), log.sink);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		assert.strictEqual(chat.stop(), true);
+		await log.wait();
+
+		assert.strictEqual(log.terminal.type, 'done');
+		assert.strictEqual(log.terminal.type === 'done' ? log.terminal.reason : '', 'aborted');
 	});
 
 	test('stop ends the turn and reports aborted rather than failing', async () => {
@@ -574,6 +729,414 @@ suite('Desktop: chat session', () => {
 
 	test('stop with nothing running reports false', () => {
 		assert.strictEqual(session().stop(), false);
+	});
+
+	// ── Etapa 14A, Bloco 1: the abort cause travels as data ─────────────────
+	//
+	// The defect these cover: the orchestrator decided "is this worth retrying"
+	// by searching the failure message for the English words `timeout`,
+	// `overloaded`, `rate limit`. The message the timers produce is Portuguese,
+	// so every real timeout classified as *not* recoverable and the fallback path
+	// silently never ran. The fix moves the fact out of the prose and into a
+	// typed field; these assert the field, and that the two things which must
+	// never trigger a retry still do not.
+
+	test('a stall reports its cause as data, not only as prose', async () => {
+		const signalRef: { signal?: AbortSignal } = {};
+		const chat = session(stalledFetch(signalRef), {
+			turnTimeoutMs: 5_000,
+			firstTokenTimeoutMs: 80,
+		});
+		await chat.saveProvider({ baseUrl: LOCAL_URL });
+		const log = new EventLog();
+
+		await chat.sendMessage(await sendInput(chat), log.sink);
+		await log.wait();
+
+		assert.strictEqual(log.terminal.type, 'error');
+		assert.strictEqual(
+			log.terminal.type === 'error' ? log.terminal.abortCause : undefined,
+			'first-token',
+			'the cause must survive as data, because the message cannot be trusted to carry it',
+		);
+	});
+
+	test('a total-time abort reports its own cause, distinct from a stall', async () => {
+		const chat = session(
+			async (_url, init) => {
+				let listener: (() => void) | undefined;
+				return {
+					ok: true,
+					status: 200,
+					body: {
+						[Symbol.asyncIterator]: () => ({
+							next: () => {
+								if (listener === undefined && init?.signal !== undefined) {
+									return new Promise<IteratorResult<Uint8Array | string>>((resolve, reject) => {
+										listener = () =>
+											reject(
+												Object.assign(new Error('This operation was aborted'), { name: 'AbortError' }),
+											);
+										init?.signal?.addEventListener('abort', listener, { once: true });
+										resolve({ value: delta('começou'), done: false });
+									});
+								}
+								return new Promise<IteratorResult<Uint8Array | string>>((_, reject) => {
+									init?.signal?.addEventListener(
+										'abort',
+										() => reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })),
+										{ once: true },
+									);
+								});
+							},
+						}),
+					},
+					text: async () => '',
+				};
+			},
+			{ turnTimeoutMs: 200, firstTokenTimeoutMs: 5_000 },
+		);
+		await chat.saveProvider({ baseUrl: LOCAL_URL });
+		const log = new EventLog();
+
+		await chat.sendMessage(await sendInput(chat), log.sink);
+		await log.wait();
+
+		assert.strictEqual(log.terminal.type, 'error');
+		assert.strictEqual(
+			log.terminal.type === 'error' ? log.terminal.abortCause : undefined,
+			'total-time',
+		);
+	});
+
+	test('a genuine failure carries no abort cause at all', async () => {
+		const chat = await readySession(async () => ({
+			ok: false,
+			status: 400,
+			body: null,
+			text: async () => 'bad request',
+		}));
+		const log = new EventLog();
+
+		await chat.sendMessage(await sendInput(chat), log.sink);
+		await log.wait();
+
+		assert.strictEqual(log.terminal.type, 'error');
+		// Absent, not `'total-time'` or some invented value: "no cause" is what
+		// tells the orchestrator to classify the failure on its own merits.
+		assert.strictEqual(
+			log.terminal.type === 'error' ? log.terminal.abortCause : 'set',
+			undefined,
+		);
+	});
+
+	test('the abort cause crosses the bridge without being rewritten', () => {
+		const parsed = parseChatStreamEvent({
+			type: 'error',
+			turnId: 'turn-1',
+			message: 'O modelo não começou a responder em 60s.',
+			abortCause: 'first-token',
+		});
+
+		assert.strictEqual(parsed.type, 'error');
+		assert.strictEqual(
+			parsed.type === 'error' ? parsed.abortCause : undefined,
+			'first-token',
+		);
+	});
+
+	test('an invented abort cause is refused rather than becoming a fourth kind', () => {
+		assert.throws(
+			() =>
+				parseChatStreamEvent({
+					type: 'error',
+					turnId: 'turn-1',
+					message: 'x',
+					abortCause: 'felt-slow',
+				}),
+			/unknown abortCause/,
+		);
+	});
+
+	test('a user stop is never treated as a recoverable failure', () => {
+		// The user pressing Stop is a decision, not a fault of the model. Retrying
+		// elsewhere would override it.
+		assert.strictEqual(
+			shouldFallback({ abortCause: 'user-stop', timeoutConfigured: true }),
+			false,
+		);
+		assert.strictEqual(
+			shouldFallback({ abortCause: 'user-stop', timeoutConfigured: true, hadToolCalls: false }),
+			false,
+		);
+	});
+
+	test('a timeout with a configured budget is recoverable', () => {
+		assert.strictEqual(
+			shouldFallback({ abortCause: 'first-token', timeoutConfigured: true }),
+			true,
+		);
+		assert.strictEqual(
+			shouldFallback({ abortCause: 'total-time', timeoutConfigured: true }),
+			true,
+		);
+	});
+
+	test('a timeout with no configured budget is not recoverable', () => {
+		// The "no fallback on an arbitrary delay" rule. With no budget there is
+		// nothing to have exceeded, so a slow-but-progressing turn must not move
+		// the turn to a different model mid-answer.
+		assert.strictEqual(
+			shouldFallback({ abortCause: 'first-token', timeoutConfigured: false }),
+			false,
+		);
+		assert.strictEqual(
+			shouldFallback({ abortCause: 'total-time' }),
+			false,
+			'an unconfigured budget defaults to not treating a delay as a fault',
+		);
+	});
+
+	test('a turn that already ran a tool is never retried, however innocent the failure', () => {
+		// Checked before the cause on purpose: a turn that wrote a file or ran a
+		// command cannot be repeated just because the model was then slow.
+		assert.strictEqual(
+			shouldFallback({ abortCause: 'total-time', timeoutConfigured: true, hadToolCalls: true }),
+			false,
+		);
+		assert.strictEqual(
+			shouldFallback({ error: new Error('503 service unavailable'), hadToolCalls: true }),
+			false,
+		);
+	});
+
+	test('a real failure with no cause is still classified on its own message', () => {
+		assert.strictEqual(shouldFallback({ error: new Error('503 service unavailable') }), true);
+		assert.strictEqual(shouldFallback({ error: new Error('Authentication failed (HTTP 401)') }), false);
+		assert.strictEqual(shouldFallback({ error: 'not an Error' }), false);
+	});
+
+	test('a timeout moves on to the next eligible model', () => {
+		const second = selectable('p', 'segundo');
+		const continuation = continueOrchestration(
+			{ primary: selectable('p', 'primeiro'), candidates: [second] },
+			[
+				{
+					attempt: 1,
+					model: selectable('p', 'primeiro'),
+					error: new Error('O modelo não começou a responder em 60s.'),
+					recoverable: true,
+					timestamp: '2024-01-01T00:00:00.000Z',
+				},
+			],
+			new Error('O modelo não começou a responder em 60s.'),
+			3,
+			'fallback',
+			{ abortCause: 'first-token' },
+		);
+
+		assert.strictEqual(continuation.nextModel?.modelId, 'segundo');
+		assert.strictEqual(continuation.recoverable, true);
+		assert.match(continuation.reason, /Timeout esperando o primeiro token/);
+	});
+
+	test('a user stop moves on to nothing', () => {
+		const continuation = continueOrchestration(
+			{ primary: selectable('p', 'primeiro'), candidates: [selectable('p', 'segundo')] },
+			[
+				{
+					attempt: 1,
+					model: selectable('p', 'primeiro'),
+					error: new Error('abortado'),
+					recoverable: true,
+					timestamp: '2024-01-01T00:00:00.000Z',
+				},
+			],
+			new Error('abortado'),
+			3,
+			'fallback',
+			{ abortCause: 'user-stop' },
+		);
+
+		assert.strictEqual(continuation.nextModel, undefined);
+		assert.strictEqual(continuation.recoverable, false);
+	});
+
+	test('a timeout does not retry a model that already ran tools', () => {
+		// `continueOrchestration` trusts the caller's `recoverable`, which is what
+		// `shouldFallback` already set to false once a tool ran. The two decisions
+		// together are the guarantee; this pins the second half.
+		const continuation = continueOrchestration(
+			{ primary: selectable('p', 'primeiro'), candidates: [selectable('p', 'segundo')] },
+			[
+				{
+					attempt: 1,
+					model: selectable('p', 'primeiro'),
+					error: new Error('excedeu o tempo'),
+					// What `shouldFallback` records when a tool had already run.
+					recoverable: false,
+					timestamp: '2024-01-01T00:00:00.000Z',
+				},
+			],
+			new Error('excedeu o tempo'),
+			3,
+			'fallback',
+			{ abortCause: 'total-time' },
+		);
+
+		assert.strictEqual(continuation.nextModel, undefined);
+	});
+
+	// ── Etapa 14A, correções: stop reaches the fallback, timers never leak ──
+
+	/**
+	 * Two providers: the first stalls until its budget runs out, the second would
+	 * answer. This is the shape needed to prove both corrections — that the stop
+	 * lands on the *fallback* attempt, and that the loop's timers do not outlive
+	 * the turn.
+	 */
+	function twoProviderFetch(options: {
+		readonly firstHangs?: boolean;
+		readonly secondHangs?: boolean;
+		readonly stallMs?: number;
+	}): { fetch: FetchLike; posts: string[] } {
+		const posts: string[] = [];
+		const fetchImpl: FetchLike = async (url, init) => {
+			if (url.endsWith('/models')) {
+				// Two providers, two models, so the selector has a fallback to pick.
+				return {
+					ok: true,
+					status: 200,
+					text: async () =>
+						JSON.stringify(
+							url.includes('11434')
+								? { data: [{ id: 'modelo-lento' }] }
+								: { data: [{ id: 'modelo-rapido' }] },
+						),
+				};
+			}
+			const isSecond = url.includes('11435');
+			posts.push(isSecond ? 'segundo' : 'primeiro');
+			const hangs = isSecond ? options.secondHangs === true : options.firstHangs === true;
+			if (!hangs) {
+				return sseResponse([delta('resposta'), DONE]);
+			}
+			return {
+				ok: true,
+				status: 200,
+				body: neverStream(init?.signal),
+				text: async () => '',
+			};
+		};
+		return { fetch: fetchImpl, posts };
+	}
+
+	/** Saves both providers on one session, so the fallback has somewhere to go. */
+	async function twoProviderSession(
+		fetchImpl: FetchLike,
+		options: { readonly turnTimeoutMs?: number; readonly firstTokenTimeoutMs?: number } = {},
+	): Promise<ChatSession> {
+		const chat = session(fetchImpl, options);
+		await chat.saveProvider({ baseUrl: LOCAL_URL });
+		await chat.saveProvider({ baseUrl: SECOND_URL });
+		return chat;
+	}
+
+	test('stop reaches the fallback attempt that is currently running', async () => {
+		// The defect: each attempt releases the session slot on its way out, so
+		// between attempts nothing is registered and `stop()` answered `false` while
+		// the second model was already generating. The user pressed stop and the
+		// turn carried on.
+		const { fetch: fetchImpl, posts } = twoProviderFetch({
+			firstHangs: true,
+			secondHangs: true,
+			stallMs: 40,
+		});
+		const chat = await twoProviderSession(fetchImpl, {
+			firstTokenTimeoutMs: 40,
+			turnTimeoutMs: 5_000,
+		});
+		const log = new EventLog();
+
+		await chat.sendMessage(await sendInput(chat, { strategy: 'fallback' }), log.sink);
+
+		// Wait until the first attempt has timed out and the second has started.
+		const deadline = Date.now() + 2_000;
+		while (posts.length < 2 && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		}
+		assert.deepStrictEqual(posts, ['primeiro', 'segundo'], 'the fallback attempt really did start');
+
+		// The stop has to land *here*: on the second attempt, with the session
+		// still reporting busy.
+		assert.strictEqual(chat.isBusy, true, 'the turn is still running when stop is pressed');
+		assert.strictEqual(chat.stop(), true, 'stop must find the fallback attempt to abort');
+
+		await log.wait();
+		assert.strictEqual(chat.isBusy, false, 'and the session is free once it settles');
+	});
+
+	test('an orchestration gives the slot back exactly once, when it is over', async () => {
+		const { fetch: fetchImpl } = twoProviderFetch({});
+		const chat = await twoProviderSession(fetchImpl, {
+			firstTokenTimeoutMs: 2_000,
+			turnTimeoutMs: 5_000,
+		});
+		const log = new EventLog();
+
+		await chat.sendMessage(await sendInput(chat, { strategy: 'fallback' }), log.sink);
+		await log.wait();
+
+		assert.strictEqual(chat.isBusy, false, 'a finished orchestration does not keep the session busy');
+		assert.strictEqual(chat.stop(), false, 'and there is nothing left to stop');
+	});
+
+	test('a turn that throws before its stream exists still frees the session', async () => {
+		// The path `release()` never covered: the provider throws before the stream
+		// exists, so `runAgentTurn` is never reached and the only thing standing
+		// between a throw and two armed timers was the `finally`. Without it the
+		// stall timer stays armed for its whole budget and, on firing, calls
+		// `cancelAll` on the session's broker — denying whichever turn's
+		// permission dialog happens to be open at that moment.
+		const chat = await readySession(async (url, init) => {
+			if (url.endsWith('/models')) {
+				return {
+					ok: true,
+					status: 200,
+					text: async () => JSON.stringify({ data: [{ id: 'llama3' }] }),
+				};
+			}
+			if (throwing) {
+				throw Object.assign(new Error('socket destroyed'), { code: 'ECONNRESET' });
+			}
+			// The second turn hangs, so a leftover timer from the first has a
+			// window in which to act on it.
+			return { ok: true, status: 200, body: neverStream(init?.signal), text: async () => '' };
+		});
+		let throwing = true;
+		const log = new EventLog();
+
+		await chat.sendMessage(await sendInput(chat), log.sink);
+		await log.wait();
+
+		assert.strictEqual(log.terminal.type, 'error', 'the thrown provider surfaced as an error');
+		assert.strictEqual(chat.isBusy, false, 'and the session is free');
+
+		throwing = false;
+		const second = new EventLog();
+		await chat.sendMessage(await sendInput(chat), second.sink);
+		// Past the first turn's whole stall budget, which is where a leaked timer
+		// would have fired against this turn. The second turn's own budgets are the
+		// 60s/120s defaults, so it is nowhere near ending on its own.
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		assert.strictEqual(
+			second.settled,
+			undefined,
+			'a leftover timer from the finished turn must not settle the turn that replaced it',
+		);
+		assert.strictEqual(chat.isBusy, true, 'the second turn is still running on its own budget');
+		assert.strictEqual(chat.stop(), true, 'and it is still stoppable');
+		await second.wait();
 	});
 
 	test('a second send while a turn runs is refused', async () => {
@@ -653,6 +1216,37 @@ suite('Desktop: chat session', () => {
 		assert.strictEqual(chat.isBusy, false, 'and the session is free afterwards');
 	});
 
+	test('a retry with empty messages re-runs the turn without duplicating the user text', async () => {
+		const { fetchImpl, calls } = scriptedFetch([delta('answer'), DONE]);
+		const chat = await readySession(fetchImpl);
+		const input = await sendInput(chat);
+
+		const firstLog = new EventLog();
+		await chat.sendMessage(input, firstLog.sink);
+		await firstLog.wait();
+		assert.strictEqual(firstLog.terminal.type, 'done', 'the first turn itself works');
+
+		// The retry: same conversation, same model, no new message — the user's
+		// text is already in the transcript and must not be appended again.
+		const retryLog = new EventLog();
+		await chat.sendMessage({ ...input, messages: [] }, retryLog.sink);
+		await retryLog.wait();
+
+		assert.strictEqual(retryLog.terminal.type, 'done');
+		const posts = calls.filter((call) => call.url.endsWith('/chat/completions'));
+		assert.strictEqual(posts.length, 2, 'the model was called once per turn');
+		const secondMessages = JSON.parse(posts[1].body ?? '{}').messages as { role: string }[];
+		assert.strictEqual(
+			secondMessages.filter((message) => message.role === 'user').length,
+			1,
+			'exactly one user message, from the original send',
+		);
+
+		const opened = await chat.openConversation(input.conversationId);
+		const transcript = opened.messages.map((message) => message.role);
+		assert.deepStrictEqual(transcript, ['user', 'assistant', 'assistant']);
+	});
+
 	test('a missing conversation fails the send, not the stream', async () => {
 		const chat = session();
 		const log = new EventLog();
@@ -703,10 +1297,15 @@ suite('Desktop: chat session', () => {
 			.map((call) => call.body as string);
 		assert.strictEqual(bodies.length, 2);
 		const firstBody = JSON.parse(bodies[0]) as { messages: { content: string }[] };
-		assert.deepStrictEqual(firstBody.messages.map((message) => message.content), ['one']);
+		// The Seshyina Agent identity leads every request, injected per turn.
+		assert.deepStrictEqual(firstBody.messages.map((message) => message.content), [
+			SESHYINA_AGENT_IDENTITY,
+			'one',
+		]);
 
 		const secondBody = JSON.parse(bodies[1]) as { messages: { content: string }[] };
 		assert.deepStrictEqual(secondBody.messages.map((message) => message.content), [
+			SESHYINA_AGENT_IDENTITY,
 			'one',
 			'first answer',
 			'two',
@@ -874,12 +1473,48 @@ suite('Desktop: chat session', () => {
 		const first = await chat.createConversation({ providerId: LOCAL_ID, title: 'Keep' });
 		const second = await chat.createConversation({ providerId: LOCAL_ID, title: 'Drop' });
 
-		assert.strictEqual(await chat.deleteConversation(second.summary.id), true);
-		assert.strictEqual(await chat.deleteConversation(second.summary.id), false);
+		assert.strictEqual(await chat.deleteConversation(second.summary.id), 'deleted');
+		// R4M: a segunda exclusão é um sucesso idempotente, e diz que
+		// encontrou a conversa já ausente — não um `false` ambíguo.
+		assert.strictEqual(await chat.deleteConversation(second.summary.id), 'absent');
 		assert.deepStrictEqual(
 			(await chat.listConversations()).map((item) => item.id),
 			[first.summary.id],
 		);
+	});
+
+	test('uma conversa permanente recusa a exclusão e sobrevive ao relê', async () => {
+		const chat = await readySession(scriptedFetch([]).fetchImpl);
+		const dialogue = await chat.createConversation({
+			providerId: LOCAL_ID,
+			title: 'Preferências de modelo',
+		});
+		await chat.setConversationPinned(dialogue.summary.id, true);
+
+		await assert.rejects(
+			() => chat.deleteConversation(dialogue.summary.id),
+			/permanente/,
+			'a exclusão é recusada pelo store, não só escondida na interface',
+		);
+		// A recusa não pode ter deixado a lista num estado que diga o contrário.
+		const listed = await chat.listConversations();
+		assert.strictEqual(listed[0]?.pinned, true);
+		assert.strictEqual(listed[0]?.id, dialogue.summary.id);
+
+		// Uma sessão nova sobre os mesmos arquivos lê a marca do disco.
+		const reopened = session();
+		const again = (await reopened.listConversations()).find(
+			(item) => item.id === dialogue.summary.id,
+		);
+		assert.strictEqual(again?.pinned, true);
+
+		// Desmarcada, volta a ser uma conversa comum — e a chave some do disco.
+		await reopened.setConversationPinned(dialogue.summary.id, false);
+		const record = await new FileDataStore({ rootPath: join(root, 'data') }).getConversation(
+			dialogue.summary.id,
+		);
+		assert.strictEqual(record?.pinned, undefined);
+		assert.strictEqual(await reopened.deleteConversation(dialogue.summary.id), 'deleted');
 	});
 
 	test('conversations are listed newest activity first', async () => {
@@ -937,6 +1572,7 @@ suite('Desktop: chat session', () => {
 			messages: { role: string; content: string }[];
 		};
 		assert.deepStrictEqual(body.messages, [
+			{ role: 'system', content: SESHYINA_AGENT_IDENTITY },
 			{ role: 'system', content: 'you are a terse assistant' },
 			{ role: 'user', content: 'hi' },
 		]);
@@ -979,14 +1615,17 @@ suite('Desktop: chat session', () => {
 		const secondBody = JSON.parse(bodies[1]) as {
 			messages: { role: string; content: string }[];
 		};
-		// The prompt leads, then the whole prior conversation, then the new turn.
+		// The identity leads, then the prompt, then the whole prior conversation,
+		// then the new turn.
 		assert.deepStrictEqual(secondBody.messages.map((message) => message.role), [
+			'system',
 			'system',
 			'user',
 			'assistant',
 			'user',
 		]);
-		assert.strictEqual(secondBody.messages[0].content, 'added later');
+		assert.strictEqual(secondBody.messages[0].content, SESHYINA_AGENT_IDENTITY);
+		assert.strictEqual(secondBody.messages[1].content, 'added later');
 	});
 
 	test('a prompt belongs to one conversation and never leaks into another', async () => {
@@ -1010,8 +1649,10 @@ suite('Desktop: chat session', () => {
 		);
 		await log.wait();
 
-		const body = JSON.parse(calls[0].body ?? '{}') as { messages: { role: string }[] };
-		assert.deepStrictEqual(body.messages.map((message) => message.role), ['user']);
+		const body = JSON.parse(calls[0].body ?? '{}') as { messages: { role: string; content: string }[] };
+		// The identity is injected per turn; the conversation's own prompt stays empty.
+		assert.deepStrictEqual(body.messages.map((message) => message.role), ['system', 'user']);
+		assert.strictEqual(body.messages[0].content, SESHYINA_AGENT_IDENTITY);
 		assert.strictEqual((await chat.openConversation(plain.summary.id)).systemPrompt, '');
 		assert.strictEqual(
 			(await chat.openConversation(prompted.summary.id)).systemPrompt,
@@ -1041,8 +1682,10 @@ suite('Desktop: chat session', () => {
 		);
 		await log.wait();
 
-		const body = JSON.parse(calls[0].body ?? '{}') as { messages: { role: string }[] };
-		assert.deepStrictEqual(body.messages.map((message) => message.role), ['user']);
+		const body = JSON.parse(calls[0].body ?? '{}') as { messages: { role: string; content: string }[] };
+		// The prompt was cleared; only the injected identity remains as system.
+		assert.deepStrictEqual(body.messages.map((message) => message.role), ['system', 'user']);
+		assert.strictEqual(body.messages[0].content, SESHYINA_AGENT_IDENTITY);
 		assert.strictEqual((await chat.openConversation(conversation.summary.id)).systemPrompt, '');
 	});
 
@@ -1076,6 +1719,7 @@ suite('Desktop: chat session', () => {
 			.map((call) => call.body as string);
 		const third = JSON.parse(bodies[2]) as { messages: { content: string }[] };
 		assert.deepStrictEqual(third.messages.map((message) => message.content), [
+			SESHYINA_AGENT_IDENTITY,
 			'in A',
 			'answer',
 			'still A',
@@ -1182,5 +1826,402 @@ suite('Desktop: provider summary shape', () => {
 
 		source.models.push('mutated');
 		assert.deepStrictEqual(summary.models, ['a', 'b']);
+	});
+});
+
+suite('Desktop: model catalog through the session', () => {
+	let root: string;
+
+	setup(async () => {
+		root = await mkdtemp(join(tmpdir(), 'seshyina-catalog-chat-'));
+	});
+
+	teardown(async () => {
+		await removeFixtureTree(root);
+	});
+
+	function session(): ChatSession {
+		return new ChatSession({
+			config: new ProviderConfigService(new FileStateStore({ filePath: join(root, 'state.json') })),
+			secrets: new FileSecretStore({ filePath: join(root, 'secrets.json') }),
+			history: new FileDataStore({ rootPath: join(root, 'data') }),
+			logger: new LoggingService(
+				new ConsoleLogSink({ out: () => undefined, err: () => undefined }),
+			),
+		});
+	}
+
+	test('a described model comes back as a form the window can fill in', async () => {
+		const chat = session();
+		const saved = await chat.saveModelCatalogEntry({
+			providerId: 'atria',
+			modelId: 'model-a',
+			capabilities: 'code, translation',
+			pricing: { currency: 'USD', unit: 'per_1m_tokens', input: '3', output: '15' },
+			access: 'paid',
+			limits: { contextTokens: '200000' },
+			notes: 'fast enough for most work',
+		});
+
+		assert.strictEqual(saved.providerId, 'atria');
+		// The list the form stores becomes the one field the form shows.
+		assert.strictEqual(saved.capabilities, 'code, translation');
+		assert.deepStrictEqual(saved.pricing, {
+			currency: 'USD',
+			unit: 'per_1m_tokens',
+			input: '3',
+			output: '15',
+		});
+		assert.strictEqual(saved.access, 'paid');
+		assert.deepStrictEqual(saved.limits, { contextTokens: '200000' });
+		assert.strictEqual(saved.notes, 'fast enough for most work');
+		assert.strictEqual(saved.observations, 0);
+	});
+
+	test('a blank capability field is stored as an empty list, not as no answer', async () => {
+		const chat = session();
+		const saved = await chat.saveModelCatalogEntry({
+			providerId: 'p',
+			modelId: 'm',
+			// The user filled the box in with nothing. That is them saying the model
+			// is good for nothing they listed, which is not the same as never having
+			// opened the form.
+			capabilities: '   ',
+		});
+
+		assert.strictEqual(saved.capabilities, '');
+		const reopened = await session().getModelCatalogEntry({ providerId: 'p', modelId: 'm' });
+		assert.strictEqual(reopened?.capabilities, '');
+	});
+
+	test('a blank price box is stored as unknown, never as a free price', async () => {
+		const chat = session();
+		await chat.saveModelCatalogEntry({
+			providerId: 'p',
+			modelId: 'm',
+			pricing: { currency: 'USD', unit: 'per_1m_tokens' },
+		});
+		const cleared = await chat.saveModelCatalogEntry({ providerId: 'p', modelId: 'm' });
+
+		// A price with a currency but no numbers is still a declared price, with
+		// both halves unknown. The Core's rule about a zero surviving is what makes
+		// blank and free different all the way down.
+		assert.deepStrictEqual(cleared.pricing, { currency: 'USD', unit: 'per_1m_tokens' });
+		assert.strictEqual(cleared.pricing?.input, undefined);
+		assert.strictEqual(cleared.pricing?.output, undefined);
+	});
+
+	test('a price with no currency at all is put back to unknown', async () => {
+		const chat = session();
+		await chat.saveModelCatalogEntry({
+			providerId: 'p',
+			modelId: 'm',
+			pricing: { currency: 'USD', unit: 'per_1k_tokens', input: '1' },
+		});
+
+		const cleared = await chat.saveModelCatalogEntry({
+			providerId: 'p',
+			modelId: 'm',
+			// Half a price with no currency is not a price. Saving it would leave a
+			// number on screen that cannot be costed.
+			pricing: { currency: '', unit: 'per_1k_tokens', input: '1' },
+		});
+		assert.strictEqual(cleared.pricing, undefined);
+	});
+
+	test('a real zero price survives the trip to the form and back', async () => {
+		const chat = session();
+		const saved = await chat.saveModelCatalogEntry({
+			providerId: 'p',
+			modelId: 'm',
+			access: 'free',
+			pricing: { currency: 'USD', unit: 'per_1m_tokens', input: '0', output: '0' },
+		});
+
+		assert.strictEqual(saved.pricing?.input, '0');
+		assert.strictEqual(saved.pricing?.output, '0');
+		// Not folded away by the blank check: a zero is a value, not an absence.
+		assert.deepStrictEqual(saved.pricing, {
+			currency: 'USD',
+			unit: 'per_1m_tokens',
+			input: '0',
+			output: '0',
+		});
+	});
+
+	test('half-typed input is dropped rather than failing the save', async () => {
+		const chat = session();
+		// A field mid-edit must not throw on every keystroke, and the half of a
+		// number that is not one yet must not be stored as a price. `"1."` is the
+		// exception and is left out: that is unambiguously 1, not a half.
+		for (const input of ['-', '1e', 'abc', '.', '1,5']) {
+			const saved = await chat.saveModelCatalogEntry({
+				providerId: 'p',
+				modelId: 'm',
+				pricing: { currency: 'USD', unit: 'per_1k_tokens', input },
+			});
+			assert.deepStrictEqual(
+				saved.pricing,
+				{ currency: 'USD', unit: 'per_1k_tokens' },
+				`expected "${input}" to be dropped`,
+			);
+		}
+	});
+
+	test('a decimal point the user already typed is a number, not a half', async () => {
+		const chat = session();
+		const saved = await chat.saveModelCatalogEntry({
+			providerId: 'p',
+			modelId: 'm',
+			pricing: { currency: 'USD', unit: 'per_1k_tokens', input: '1.' },
+		});
+		assert.strictEqual(saved.pricing?.input, '1');
+	});
+
+	test('the median of an even number of readings is the mean of the middle two', async () => {
+		const chat = session();
+		for (const totalMs of [1000, 2000, 3000, 4000]) {
+			await chat.recordModelObservation({ providerId: 'p', modelId: 'm' }, { totalMs });
+		}
+
+		const entry = await chat.getModelCatalogEntry({ providerId: 'p', modelId: 'm' });
+		// 2000 and 3000 are the middle; the mean is 2500.
+		assert.strictEqual(entry?.medianTotalMs, 2500);
+		assert.strictEqual(entry?.observations, 4);
+	});
+
+	test('an odd number of readings takes the middle one exactly', async () => {
+		const chat = session();
+		for (const totalMs of [1000, 2000, 99_000]) {
+			await chat.recordModelObservation({ providerId: 'p', modelId: 'm' }, { totalMs });
+		}
+
+		const entry = await chat.getModelCatalogEntry({ providerId: 'p', modelId: 'm' });
+		assert.strictEqual(entry?.medianTotalMs, 2000);
+	});
+
+	test('a median of zero is reported as zero, not as missing', async () => {
+		const chat = session();
+		await chat.recordModelObservation({ providerId: 'p', modelId: 'm' }, { totalMs: 0 });
+
+		const entry = await chat.getModelCatalogEntry({ providerId: 'p', modelId: 'm' });
+		assert.strictEqual(entry?.medianTotalMs, 0);
+	});
+
+	test('runs with no timing do not drag the median down to zero', async () => {
+		const chat = session();
+		// Three fast runs and one that reported nothing at all, as an aborted
+		// request would. Counting the fourth as zero would halve the median and
+		// make a quick model look slow.
+		for (const totalMs of [100, 110, 120]) {
+			await chat.recordModelObservation({ providerId: 'p', modelId: 'm' }, { totalMs });
+		}
+		await chat.recordModelObservation({ providerId: 'p', modelId: 'm' }, {});
+
+		const entry = await chat.getModelCatalogEntry({ providerId: 'p', modelId: 'm' });
+		// All four are counted as runs…
+		assert.strictEqual(entry?.observations, 4);
+		// …but only the three that reported are averaged.
+		assert.strictEqual(entry?.medianTotalMs, 110);
+	});
+
+	test('a model with no runs reports no median rather than a zero', async () => {
+		const chat = session();
+		await chat.saveModelCatalogEntry({ providerId: 'p', modelId: 'm', access: 'paid' });
+
+		const entry = await chat.getModelCatalogEntry({ providerId: 'p', modelId: 'm' });
+		assert.strictEqual(entry?.observations, 0);
+		assert.strictEqual(entry?.medianTotalMs, undefined);
+		assert.strictEqual(entry?.medianFirstByteMs, undefined);
+	});
+
+	test('first byte and total are medians of their own readings', async () => {
+		const chat = session();
+		await chat.recordModelObservation(
+			{ providerId: 'p', modelId: 'm' },
+			{ firstByteMs: 100, totalMs: 1000 },
+		);
+		await chat.recordModelObservation(
+			{ providerId: 'p', modelId: 'm' },
+			{ firstByteMs: 300, totalMs: 3000 },
+		);
+
+		const entry = await chat.getModelCatalogEntry({ providerId: 'p', modelId: 'm' });
+		assert.strictEqual(entry?.medianFirstByteMs, 200);
+		assert.strictEqual(entry?.medianTotalMs, 2000);
+	});
+
+	test('the catalog is keyed by the pair, so two providers keep separate prices', async () => {
+		const chat = session();
+		await chat.saveModelCatalogEntry({
+			providerId: 'atria',
+			modelId: 'gpt-4o',
+			pricing: { currency: 'USD', unit: 'per_1m_tokens', input: '5' },
+		});
+		await chat.saveModelCatalogEntry({
+			providerId: 'opencode',
+			modelId: 'gpt-4o',
+			pricing: { currency: 'USD', unit: 'per_1m_tokens', input: '0' },
+		});
+
+		const listed = await chat.listModelCatalog();
+		assert.strictEqual(listed.length, 2);
+		assert.deepStrictEqual(await chat.listModelCatalog('atria'), [
+			(await chat.getModelCatalogEntry({ providerId: 'atria', modelId: 'gpt-4o' })) as never,
+		]);
+		assert.strictEqual(
+			(await chat.getModelCatalogEntry({ providerId: 'opencode', modelId: 'gpt-4o' }))?.pricing?.input,
+			'0',
+		);
+	});
+
+	test('an empty provider filter means every provider', async () => {
+		const chat = session();
+		await chat.saveModelCatalogEntry({ providerId: 'a', modelId: 'm' });
+		await chat.saveModelCatalogEntry({ providerId: 'b', modelId: 'm' });
+
+		// The IPC handler passes undefined for a blank string, and the session
+		// treats it as no filter rather than as a provider called "".
+		assert.strictEqual((await chat.listModelCatalog('')).length, 2);
+		assert.strictEqual((await chat.listModelCatalog(undefined)).length, 2);
+	});
+
+	test('forgetting a model leaves the provider configured and its key stored', async () => {
+		const chat = session();
+		await chat.saveProvider({ baseUrl: LOCAL_URL, apiKey: KEY });
+		await chat.saveModelCatalogEntry({ providerId: LOCAL_ID, modelId: 'm', access: 'paid' });
+
+		assert.strictEqual(
+			await chat.removeModelCatalogEntry({ providerId: LOCAL_ID, modelId: 'm' }),
+			true,
+		);
+
+		// The connection is untouched: a forgotten price must not un-configure
+		// the model the user is still talking to.
+		assert.deepStrictEqual(
+			(await chat.listProviders()).map((provider) => provider.id),
+			[LOCAL_ID],
+		);
+		const secrets = new FileSecretStore({ filePath: join(root, 'secrets.json') });
+		assert.strictEqual(await secrets.get(providerApiKeyRef(LOCAL_ID)), KEY);
+	});
+
+	test('a record survives a new session over the same files', async () => {
+		await session().saveModelCatalogEntry({
+			providerId: 'p',
+			modelId: 'm',
+			capabilities: 'code',
+			pricing: { currency: 'USD', unit: 'per_1k_tokens', input: '1.5' },
+			access: 'paid',
+		});
+
+		const reopened = await session().listModelCatalog();
+		assert.strictEqual(reopened.length, 1);
+		assert.strictEqual(reopened[0].capabilities, 'code');
+		assert.strictEqual(reopened[0].pricing?.input, '1.5');
+		assert.strictEqual(reopened[0].access, 'paid');
+	});
+
+	test('nothing in the catalog is used to choose a model', async () => {
+		// This stage must not touch model selection. The proof is that the model
+		// list is still exactly what the providers report, with a record present
+		// that claims something quite different.
+		const chat = session();
+		await chat.saveProvider({ baseUrl: LOCAL_URL });
+		await chat.saveModelCatalogEntry({
+			providerId: LOCAL_ID,
+			modelId: 'never-recommend-me',
+			access: 'paid',
+			capabilities: 'nothing useful',
+		});
+
+		const available = await chat.listAvailableModels();
+		assert.ok(available.every((entry) => entry.model !== 'never-recommend-me'));
+	});
+});
+
+suite('Desktop: default provider seed', () => {
+	let root: string;
+
+	setup(async () => {
+		root = await mkdtemp(join(tmpdir(), 'seshyina-seed-'));
+	});
+
+	teardown(async () => {
+		await removeFixtureTree(root);
+	});
+
+	function session(): ChatSession {
+		return new ChatSession({
+			config: new ProviderConfigService(new FileStateStore({ filePath: join(root, 'state.json') })),
+			secrets: new FileSecretStore({ filePath: join(root, 'secrets.json') }),
+			history: new FileDataStore({ rootPath: join(root, 'data') }),
+			logger: new LoggingService(
+				new ConsoleLogSink({ out: () => undefined, err: () => undefined }),
+			),
+		});
+	}
+
+	test('a fresh session starts with no providers (R4S: nothing is seeded)', async () => {
+		const chat = session();
+		assert.strictEqual(chat.listProviders().length, 0);
+
+		await chat.seedDefaultProviders();
+
+		// O `9router` deixou de ser semeado: uma instalação nova não ganha um
+		// provedor que não responde.
+		assert.strictEqual(chat.listProviders().length, 0);
+	});
+
+	test('a provider the user configured is never touched by the seed step', async () => {
+		const chat = session();
+		await chat.saveProvider({
+			id: 'meu-proxy',
+			name: 'Meu proxy',
+			baseUrl: 'https://my-proxy.example/v1',
+			apiKey: 'k',
+		});
+
+		await chat.seedDefaultProviders();
+
+		const stored = chat.listProviders().find((provider) => provider.id === 'meu-proxy');
+		assert.strictEqual(stored?.baseUrl, 'https://my-proxy.example/v1');
+		assert.strictEqual(stored?.name, 'Meu proxy');
+		assert.strictEqual(stored?.hasApiKeyRef, true);
+	});
+
+	test('a provider kept from an older install survives the seed step', async () => {
+		// Instalação anterior: o `9router` existe e tem URL editada pelo
+		// usuário. A R4S não o semeia nem o remove — ele continua como está.
+		const chat = session();
+		await chat.saveProvider({
+			id: '9router',
+			name: 'My 9Router',
+			baseUrl: 'https://my-proxy.example/v1',
+			apiKey: 'k',
+		});
+
+		await chat.seedDefaultProviders();
+
+		const stored = chat.listProviders().find((provider) => provider.id === '9router');
+		assert.strictEqual(stored?.baseUrl, 'https://my-proxy.example/v1');
+		assert.strictEqual(stored?.name, 'My 9Router');
+	});
+
+	test('removing the last provider leaves none, and the seed step does not bring one back', async () => {
+		const chat = session();
+		await chat.saveProvider({
+			id: '9router',
+			name: '9Router',
+			baseUrl: 'http://localhost:20128/v1',
+		});
+		assert.strictEqual(chat.listProviders().length, 1);
+
+		await chat.removeProvider('9router');
+		assert.strictEqual(chat.listProviders().length, 0);
+
+		await chat.seedDefaultProviders();
+
+		assert.strictEqual(chat.listProviders().length, 0);
 	});
 });

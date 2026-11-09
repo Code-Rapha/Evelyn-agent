@@ -36,6 +36,8 @@ class ScriptedProvider implements ChatProvider {
 function streamOf(events: readonly ChatStreamEvent[]): ChatStream {
 	return {
 		closedReason: 'completed',
+		// Never measured: this is a fixture, not a request.
+		timing: {},
 		[Symbol.asyncIterator]: async function* () {
 			yield* events;
 		},

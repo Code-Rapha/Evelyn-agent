@@ -3,6 +3,7 @@ import {
 	ProviderConfigService,
 	buildProviderConfig,
 	PROVIDER_CONFIG_KEY,
+	PROVIDER_REMOVED_KEY,
 	type PersistedProviderConfig,
 	type StateStore,
 } from '../../core/providers/config';
@@ -189,6 +190,47 @@ suite('Foundation: provider configuration persistence', () => {
 		await service.removeAll();
 
 		assert.deepStrictEqual(service.list(), []);
+	});
+
+	test('a removed provider is remembered as removed', async () => {
+		await service.save(config({ id: 'openai' }));
+
+		await service.remove('openai');
+
+		assert.strictEqual(service.isRemoved('openai'), true);
+		assert.strictEqual(service.removed().includes('openai'), true);
+	});
+
+	test('a removal survives a new service over the same state', async () => {
+		await service.save(config({ id: 'openai' }));
+		await service.remove('openai');
+
+		const reloaded = new ProviderConfigService(memento);
+
+		assert.strictEqual(reloaded.isRemoved('openai'), true);
+	});
+
+	test('saving a provider again takes the removal away', async () => {
+		await service.save(config({ id: 'openai' }));
+		await service.remove('openai');
+
+		await service.save(config({ id: 'openai' }));
+
+		assert.strictEqual(service.isRemoved('openai'), false);
+	});
+
+	test('a globalState holding a malformed removal list removes nothing', () => {
+		memento.seed(PROVIDER_REMOVED_KEY, 'not-an-array');
+		assert.deepStrictEqual(service.removed(), []);
+	});
+
+	test('removing an absent provider changes nothing', async () => {
+		const writesBefore = memento.writes.length;
+
+		assert.strictEqual(await service.remove('nope'), false);
+
+		assert.strictEqual(memento.writes.length, writesBefore);
+		assert.deepStrictEqual(service.removed(), []);
 	});
 
 	test('a saved configuration survives a new service over the same state', async () => {

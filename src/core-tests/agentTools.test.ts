@@ -342,7 +342,7 @@ suite('Agent: tools through the runtime', function () {
 				role: string;
 				content: string;
 				tool_call_id?: string;
-				tool_calls?: { type: string; function: { name: string; arguments: string } }[];
+				tool_calls?: { id?: string; type: string; function: { name: string; arguments: string } }[];
 			}[];
 		};
 		const answerIndex = second.messages.findIndex((message) => message.role === 'tool');
@@ -355,6 +355,7 @@ suite('Agent: tools through the runtime', function () {
 		assert.strictEqual(parent.role, 'assistant');
 		assert.deepStrictEqual(parent.tool_calls, [
 			{
+				id: 'c1',
 				type: 'function',
 				function: { name: 'read_file', arguments: '{"path":"notes.txt"}' },
 			},
@@ -889,6 +890,87 @@ suite('Agent: tools through the runtime', function () {
 		// to confine itself to, and guessing one would be worse.
 		assert.strictEqual(log.toolResults[0].ok, false);
 		assert.match(log.toolResults[0].output, /needs a workspace/i);
+	});
+
+	// ── catálogo de modelos ─────────────────────────────────────────────────
+
+	/**
+	 * O que a Evelyn precisou pedir ao usuário no dia 3.
+	 *
+	 * A sessão aqui não tem `dev` (nenhum modo DEV), a conversa não tem projeto
+	 * (nenhum workspace) e nada foi escrito no repositório. Ainda assim a
+	 * consulta tem de funcionar: ela lê a **sessão**, não o disco do projeto.
+	 */
+	test('list_models responde sem DEV e sem workspace', async () => {
+		const { fetchImpl } = scriptedAgent([
+			{ calls: [{ id: 'c1', name: 'list_models', args: {} }] },
+			{ text: 'listei' },
+		]);
+		const { chat, conversationId } = await agentSession(fetchImpl, { withProject: false });
+		const log = new EventLog();
+
+		await chat.sendMessage(
+			{
+				providerId: LOCAL_ID,
+				conversationId,
+				model: 'test-model',
+				messages: [{ role: 'user', content: 'quais modelos você conhece?' }],
+			},
+			log.sink,
+		);
+		await log.wait();
+
+		assert.strictEqual(log.toolResults[0].ok, true, log.toolResults[0].output);
+		// O modelo do provedor falso está publicado e é o que o catálogo conhece.
+		assert.match(log.toolResults[0].output, /test-model/);
+	});
+
+	test('uma consulta de catálogo é lida pelo modelo sem chamada de ferramenta', async () => {
+		// A ferramenta é anunciada ao modelo: sem isto ele não saberia que pode
+		// perguntar, e voltaria a pedir a lista ao usuário.
+		const { fetchImpl, calls } = scriptedAgent([{ text: 'ok' }]);
+		const { chat, conversationId } = await agentSession(fetchImpl, { withProject: false });
+		const log = new EventLog();
+
+		await chat.sendMessage(
+			{
+				providerId: LOCAL_ID,
+				conversationId,
+				model: 'test-model',
+				messages: [{ role: 'user', content: 'oi' }],
+			},
+			log.sink,
+		);
+		await log.wait();
+
+		const posted = calls.find((call) => !call.url.endsWith('/models') && call.body !== undefined);
+		const body = JSON.parse(posted?.body ?? '{}') as { tools?: { function?: { name?: string } }[] };
+		const names = (body.tools ?? []).map((tool) => tool.function?.name);
+		assert.ok(names.includes('list_models'), `anunciadas: ${names.join(', ')}`);
+		assert.ok(names.includes('model_details'));
+		assert.ok(names.includes('recommend_model'));
+		assert.ok(names.includes('refresh_models'));
+	});
+
+	test('as ferramentas do catálogo não exigem o modo DEV', async () => {
+		// Sem `dev`, as ferramentas `dev_*` não existem; as do catálogo, sim.
+		const { fetchImpl, calls } = scriptedAgent([{ text: 'ok' }]);
+		const { chat, conversationId } = await agentSession(fetchImpl, { withProject: false });
+		const log = new EventLog();
+		await chat.sendMessage(
+			{
+				providerId: LOCAL_ID,
+				conversationId,
+				model: 'test-model',
+				messages: [{ role: 'user', content: 'oi' }],
+			},
+			log.sink,
+		);
+		await log.wait();
+		const posted = calls.find((call) => !call.url.endsWith('/models') && call.body !== undefined);
+		const body = JSON.parse(posted?.body ?? '{}') as { tools?: { function?: { name?: string } }[] };
+		const names = (body.tools ?? []).map((tool) => tool.function?.name ?? '');
+		assert.ok(!names.some((name) => name.startsWith('dev_')), 'sem DEV não há ferramentas dev_');
 	});
 
 	// ── event hygiene ───────────────────────────────────────────────────────

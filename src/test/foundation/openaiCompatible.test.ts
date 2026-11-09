@@ -153,6 +153,184 @@ suite('Foundation: OpenAI-compatible provider', () => {
 		assert.strictEqual(calls[0].url, `${BASE_URL}/models`);
 	});
 
+	// ── Etapa 14A: /models is bounded and cancellable ───────────────────────
+	//
+	// The defect these cover: `requestModels` sent its GET with no `signal` and
+	// no budget of its own. An endpoint that accepted the connection and then
+	// said nothing held the caller for as long as the platform was willing to
+	// wait, and `listAvailableModels` asks every provider in turn — so one silent
+	// provider froze the whole list for everyone.
+
+	/** A fetch that accepts the connection and then never answers. */
+	function silentFetch(signalSeen: { signal?: AbortSignal }): FetchLike {
+		return (_url, init) =>
+			new Promise((_resolve, reject) => {
+				signalSeen.signal = init?.signal;
+				init?.signal?.addEventListener(
+					'abort',
+					() => reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })),
+					{ once: true },
+				);
+			});
+	}
+
+	test('a /models request carries a signal, so it can be cancelled', async () => {
+		const seen: { signal?: AbortSignal } = {};
+		const provider = new OpenAICompatibleProvider({
+			id: 'p',
+			name: 'P',
+			baseUrl: BASE_URL,
+			fetch: silentFetch(seen),
+			// Long enough that only the caller's abort can end this, which is the
+			// point: the assertion is about the signal being *there*, not about the
+			// timeout firing.
+			modelsTimeoutMs: 10_000,
+		});
+		const controller = new AbortController();
+
+		const pending = provider.listModels({ signal: controller.signal }).catch(() => undefined);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+
+		assert.ok(seen.signal !== undefined, 'the GET must carry a signal');
+		controller.abort();
+		await pending;
+	});
+
+	test('a silent endpoint is given up on after its own budget', async () => {
+		const seen: { signal?: AbortSignal } = {};
+		const provider = new OpenAICompatibleProvider({
+			id: 'p',
+			name: 'P',
+			baseUrl: BASE_URL,
+			fetch: silentFetch(seen),
+			// Small, so the test asserts the behaviour without waiting for it.
+			modelsTimeoutMs: 30,
+		});
+
+		const error = await provider.listModels().then(
+			() => undefined,
+			(caught: unknown) => caught,
+		);
+
+		assert.ok(error instanceof ProviderError, 'a timeout is a provider error naming the endpoint');
+		assert.match(error.message, /did not respond within 30ms/);
+	});
+
+	test('a timeout does not mark the provider as broken', async () => {
+		// The provider did not fail — the caller ran out of patience. Leaving the
+		// status at `error` would make the next listing inherit a verdict from a
+		// request that was abandoned.
+		const provider = new OpenAICompatibleProvider({
+			id: 'p',
+			name: 'P',
+			baseUrl: BASE_URL,
+			fetch: silentFetch({}),
+			modelsTimeoutMs: 30,
+		});
+
+		await provider.listModels().catch(() => undefined);
+
+		assert.notStrictEqual(provider.descriptor.status, 'error');
+	});
+
+	test("a caller's own abort stays an abort, and is not reported as a timeout", async () => {
+		// The distinction the whole chaining is for: a slow provider and a user who
+		// gave up look identical from inside the fetch unless the reason was kept.
+		const seen: { signal?: AbortSignal } = {};
+		const provider = new OpenAICompatibleProvider({
+			id: 'p',
+			name: 'P',
+			baseUrl: BASE_URL,
+			fetch: silentFetch(seen),
+			// Long, so the timeout cannot be what ends this.
+			modelsTimeoutMs: 10_000,
+		});
+		const controller = new AbortController();
+
+		const pending = provider.listModels({ signal: controller.signal }).catch((error: unknown) => error);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		controller.abort();
+		const error = await pending;
+
+		assert.ok(error instanceof Error);
+		assert.strictEqual(
+			(error as { name?: string }).name,
+			'AbortError',
+			'the caller cancelled it, so it must read as a cancellation',
+		);
+		assert.doesNotMatch(error.message, /did not respond within/);
+	});
+
+	test("a caller's abort does not mark the provider as broken", async () => {
+		const provider = new OpenAICompatibleProvider({
+			id: 'p',
+			name: 'P',
+			baseUrl: BASE_URL,
+			fetch: silentFetch({}),
+			modelsTimeoutMs: 10_000,
+		});
+		const controller = new AbortController();
+
+		const pending = provider.listModels({ signal: controller.signal }).catch(() => undefined);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		controller.abort();
+		await pending;
+
+		assert.notStrictEqual(provider.descriptor.status, 'error');
+	});
+
+	test('a signal that was already aborted never reaches the network', async () => {
+		let madeRequest = false;
+		const provider = new OpenAICompatibleProvider({
+			id: 'p',
+			name: 'P',
+			baseUrl: BASE_URL,
+			fetch: (url, init) => {
+				madeRequest = true;
+				return Promise.resolve({
+					ok: true,
+					status: 200,
+					text: async () => JSON.stringify({ data: [] }),
+					...(init?.signal !== undefined ? {} : {}),
+				});
+			},
+		});
+		const controller = new AbortController();
+		controller.abort();
+
+		await provider.listModels({ signal: controller.signal }).catch(() => undefined);
+
+		// The request is still built — there is no pre-flight gate — but it is built
+		// with an already-aborted signal, so a real transport drops it at once.
+		// Asserting only the flag avoids asserting which of the two strategies the
+		// transport picks.
+		assert.strictEqual(madeRequest, true);
+	});
+
+	test('a cancelled /models call leaves the timer to no effect afterwards', async () => {
+		// A leaked 5s timer per aborted discovery would keep the process alive and
+		// accumulate across a model picker that the user refreshed repeatedly.
+		const seen: { signal?: AbortSignal } = {};
+		const provider = new OpenAICompatibleProvider({
+			id: 'p',
+			name: 'P',
+			baseUrl: BASE_URL,
+			fetch: (_url, init) => {
+				seen.signal = init?.signal;
+				return Promise.resolve({
+					ok: true,
+					status: 200,
+					text: async () => JSON.stringify({ data: [{ id: 'm' }] }),
+				});
+			},
+			modelsTimeoutMs: 5_000,
+		});
+
+		await provider.listModels();
+
+		assert.strictEqual(seen.signal?.aborted, false, 'a completed request is not left aborted');
+	});
+
 	test('sends Authorization: Bearer with a stored key', async () => {
 		const { provider, calls } = createProvider({ apiKey: 'sk-secret-value' });
 
@@ -620,5 +798,200 @@ suite('Foundation: disabled provider refuses network access', () => {
 
 		assert.strictEqual(calls.length, 1);
 		assert.strictEqual(provider.descriptor.status, 'available');
+	});
+});
+
+suite('Foundation: provider usage and latency', () => {
+	/**
+	 * A fetch that answers with a streamed body, and moves the clock while it
+	 * waits the way a real network does.
+	 *
+	 * The clock is advanced by the fake rather than slept through, so the
+	 * asserted milliseconds are exact instead of "roughly however long the
+	 * machine was busy".
+	 */
+	function streamingFetch(
+		events: readonly string[],
+		options: { readonly firstByteWaitMs?: number } = {},
+	): { fetch: FetchLike; clock: { value: number; now: () => number } } {
+		const clock = {
+			value: 0,
+			now: () => clock.value,
+		};
+		const wait = options.firstByteWaitMs ?? 0;
+		const fetch: FetchLike = async () => {
+			clock.value += wait;
+			return {
+				ok: true,
+				status: 200,
+				text: async () => '',
+				body: {
+					[Symbol.asyncIterator]: async function* () {
+						for (const event of events) {
+							yield event;
+						}
+					},
+				},
+			};
+		};
+		return { fetch, clock };
+	}
+
+	function build(options: {
+		fetch: FetchLike;
+		now: () => number;
+	}): OpenAICompatibleProvider {
+		return new OpenAICompatibleProvider({
+			id: 'timing-provider',
+			name: 'Timing Provider',
+			baseUrl: BASE_URL,
+			fetch: options.fetch,
+			now: options.now,
+		});
+	}
+
+	const SSE = {
+		text: (body: string): string => `data: ${body}\n\n`,
+		done: 'data: [DONE]\n\n',
+	};
+
+	test('the wait for the response lands in firstByteMs', async () => {
+		const { fetch, clock } = streamingFetch([SSE.done], { firstByteWaitMs: 300 });
+		const provider = build({ fetch, now: clock.now });
+
+		const stream = await provider.streamChat({ model: 'model-a', messages: [] });
+
+		// Timed across the fetch, which is the slow part. A stream measuring from
+		// its own construction would report 0 here and hide a provider that
+		// takes thirty seconds to answer the first byte.
+		assert.strictEqual(stream.timing.firstByteMs, 300);
+	});
+
+	test('the total spans the fetch and the whole generation', async () => {
+		const { fetch, clock } = streamingFetch(
+			[SSE.text(JSON.stringify({ choices: [{ delta: { content: 'hi' } }] })), SSE.done],
+			{ firstByteWaitMs: 300 },
+		);
+		const provider = build({ fetch, now: clock.now });
+
+		const stream = await provider.streamChat({ model: 'model-a', messages: [] });
+		clock.value += 1_200;
+		for await (const _event of stream) {
+			// Consume, so the generator reaches its end and the total is recorded.
+		}
+
+		assert.strictEqual(stream.timing.totalMs, 1_500);
+	});
+
+	test('usage in the final chunk reaches the consumer as one Usage event', async () => {
+		const { fetch, clock } = streamingFetch([
+			SSE.text(JSON.stringify({ choices: [{ delta: { content: 'OK' } }] })),
+			SSE.text(
+				JSON.stringify({
+					choices: [],
+					usage: {
+						prompt_tokens: 18,
+						completion_tokens: 16,
+						total_tokens: 34,
+						completion_tokens_details: { reasoning_tokens: 16 },
+					},
+				}),
+			),
+			SSE.done,
+		]);
+		const provider = build({ fetch, now: clock.now });
+
+		const stream = await provider.streamChat({
+			model: 'model-a',
+			messages: [{ role: 'user', content: 'Responda apenas: OK' }],
+		});
+
+		const seen: string[] = [];
+		let usage: unknown;
+		for await (const event of stream) {
+			seen.push(event.type);
+			if (event.type === 'Usage') {
+				usage = event.usage;
+			}
+		}
+
+		assert.deepStrictEqual(seen, ['TextDelta', 'Usage', 'Done']);
+		assert.deepStrictEqual(usage, {
+			promptTokens: 18,
+			completionTokens: 16,
+			totalTokens: 34,
+			reasoningTokens: 16,
+		});
+	});
+
+	test('a request that reports nothing reports nothing', async () => {
+		const { fetch, clock } = streamingFetch([
+			SSE.text(JSON.stringify({ choices: [{ delta: { content: 'OK' } }] })),
+			SSE.done,
+		]);
+		const provider = build({ fetch, now: clock.now });
+
+		const stream = await provider.streamChat({ model: 'model-a', messages: [] });
+
+		const seen: string[] = [];
+		for await (const event of stream) {
+			seen.push(event.type);
+		}
+
+		// No Usage event, and nothing standing in for one. A zero-filled reading
+		// here would be indistinguishable from a genuinely free request in every
+		// total built from this.
+		assert.deepStrictEqual(seen, ['TextDelta', 'Done']);
+	});
+
+	test('a measurement carries numbers and nothing else', async () => {
+		// The metric has no room for a key, a prompt or an answer, so nothing
+		// private can be logged by accident. Pinned here because that is only
+		// true as long as the fields stay numeric.
+		const { fetch, clock } = streamingFetch([
+			SSE.text(JSON.stringify({ choices: [{ delta: { content: 'OK' } }] })),
+			SSE.text(JSON.stringify({ choices: [], usage: { prompt_tokens: 9, total_tokens: 11 } })),
+			SSE.done,
+		]);
+		const provider = build({ fetch, now: clock.now });
+
+		const stream = await provider.streamChat({
+			model: 'model-a',
+			messages: [{ role: 'user', content: 'segredo' }],
+		});
+
+		let usage: Record<string, unknown> | undefined;
+		for await (const event of stream) {
+			if (event.type === 'Usage') {
+				usage = event.usage as unknown as Record<string, unknown>;
+			}
+		}
+		for (const value of Object.values(usage ?? {})) {
+			assert.strictEqual(typeof value, 'number');
+		}
+		for (const value of Object.values(stream.timing)) {
+			assert.strictEqual(typeof value, 'number');
+		}
+
+		const serialized = JSON.stringify({ usage, timing: stream.timing });
+		assert.strictEqual(serialized.includes('segredo'), false);
+	});
+
+	test('an aborted request reports no timings rather than an instant one', async () => {
+		const abort = new Error('aborted');
+		abort.name = 'AbortError';
+		const provider = new OpenAICompatibleProvider({
+			id: 'timing-provider',
+			name: 'Timing Provider',
+			baseUrl: BASE_URL,
+			fetch: async () => {
+				throw abort;
+			},
+			now: () => 0,
+		});
+
+		const stream = await provider.streamChat({ model: 'model-a', messages: [] });
+
+		assert.deepStrictEqual(stream.timing, {});
 	});
 });

@@ -1,6 +1,11 @@
 import * as assert from 'assert';
-import { SseDecoder, SSE_DONE, parseChatChunk } from '../../core/providers/chat/sse';
-import { SseChatStream, isAbortError, buildChatRequestBody } from '../../core/providers/chat/sseStream';
+import { SseDecoder, SSE_DONE, parseChatChunk, parseUsage } from '../../core/providers/chat/sse';
+import {
+	SseChatStream,
+	AbortedChatStream,
+	isAbortError,
+	buildChatRequestBody,
+} from '../../core/providers/chat/sseStream';
 import type { ChatStreamEvent } from '../../core/providers/chat/types';
 
 /** Builds an SSE body from raw event payloads, as a server would send them. */
@@ -759,6 +764,7 @@ suite('Core: abort detection and request body', () => {
 				content: 'reading',
 				tool_calls: [
 					{
+						id: 'call_1',
 						type: 'function',
 						function: { name: 'read_file', arguments: '{"path":"a.txt"}' },
 					},
@@ -797,5 +803,282 @@ suite('Core: abort detection and request body', () => {
 		});
 
 		assert.ok(!('tools' in body));
+	});
+});
+
+suite('Core: usage and latency', () => {
+	/**
+	 * A usage object shaped exactly like the one a live
+	 * `api.atria-asi.ai` response carried, including the null details the
+	 * server emits for fields that do not apply to it.
+	 */
+	const LIVE_USAGE = {
+		prompt_tokens: 18,
+		completion_tokens: 16,
+		total_tokens: 34,
+		completion_tokens_details: {
+			reasoning_tokens: 16,
+			audio_tokens: null,
+			accepted_prediction_tokens: null,
+			rejected_prediction_tokens: null,
+		},
+		prompt_tokens_details: null,
+	};
+
+	/** The final chunk a server sends when streamed usage was requested. */
+	function usageChunk(usage: unknown): string {
+		return JSON.stringify({ choices: [], usage });
+	}
+
+	test('usage is read from a non-streaming response body', () => {
+		// A non-streaming reply carries usage in the body, in the same shape as
+		// the streamed final chunk. Reading it proves the parser is about the
+		// object and not about where it was found.
+		const body = JSON.parse(
+			JSON.stringify({ choices: [{ message: { content: 'OK' } }], usage: LIVE_USAGE }),
+		) as { usage: unknown };
+
+		assert.deepStrictEqual(parseUsage(body.usage), {
+			promptTokens: 18,
+			completionTokens: 16,
+			totalTokens: 34,
+			reasoningTokens: 16,
+		});
+	});
+
+	test('reasoning tokens are the only detail kept, and nulls do not become numbers', () => {
+		const usage = parseUsage({
+			prompt_tokens: 5,
+			completion_tokens: 7,
+			total_tokens: 12,
+			completion_tokens_details: { reasoning_tokens: 3, audio_tokens: null },
+			prompt_tokens_details: null,
+		});
+
+		assert.deepStrictEqual(usage, {
+			promptTokens: 5,
+			completionTokens: 7,
+			totalTokens: 12,
+			reasoningTokens: 3,
+		});
+	});
+
+	test('a missing usage object is unknown, not zero', () => {
+		assert.strictEqual(parseUsage(undefined), undefined);
+		assert.strictEqual(parseUsage(null), undefined);
+	});
+
+	test('a usage object with no usable number is unknown', () => {
+		// Present but empty says nothing measurable. Reporting an empty object
+		// instead of undefined would let a total treat it as a real reading.
+		assert.strictEqual(parseUsage({}), undefined);
+		assert.strictEqual(parseUsage({ prompt_tokens: null }), undefined);
+	});
+
+	test('a count that is not a whole non-negative number is dropped', () => {
+		const usage = parseUsage({
+			prompt_tokens: -5,
+			completion_tokens: 1.5,
+			total_tokens: '20',
+			completion_tokens_details: { reasoning_tokens: null },
+		});
+
+		assert.strictEqual(usage, undefined);
+	});
+
+	test('a partial usage reports only what was said, and never sums the rest', () => {
+		// `total_tokens` absent must stay absent. Summing 10 + 20 would be an
+		// estimate presented as a measurement, and it is exactly what would end
+		// up billed against a budget.
+		const usage = parseUsage({ prompt_tokens: 10, completion_tokens: 20 });
+
+		assert.deepStrictEqual(usage, { promptTokens: 10, completionTokens: 20 });
+		assert.strictEqual('totalTokens' in (usage as object), false);
+	});
+
+	test('a real zero is reported as zero', () => {
+		// The other direction: zero tokens on an empty completion is a genuine
+		// reading and must survive, which is why the check is on the value and
+		// not on truthiness.
+		assert.deepStrictEqual(parseUsage({ prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }), {
+			promptTokens: 0,
+			completionTokens: 0,
+			totalTokens: 0,
+		});
+	});
+
+	test('the final SSE chunk, which has no choices, still yields its usage', () => {
+		// This chunk is the only place a streamed response says what it cost.
+		// Before, an empty `choices` returned early as a keepalive and threw it
+		// away, so every streamed request read as free.
+		const chunk = parseChatChunk(usageChunk(LIVE_USAGE));
+
+		assert.ok(chunk);
+		assert.deepStrictEqual(chunk.usage, {
+			promptTokens: 18,
+			completionTokens: 16,
+			totalTokens: 34,
+			reasoningTokens: 16,
+		});
+		assert.strictEqual(chunk.text, '');
+		assert.deepStrictEqual(chunk.toolCalls, []);
+	});
+
+	test('a keepalive is still nothing to report', () => {
+		assert.strictEqual(parseChatChunk(JSON.stringify({ choices: [] })), undefined);
+		assert.strictEqual(parseChatChunk(JSON.stringify({ choices: [{ delta: {} }] })), undefined);
+	});
+
+	test('usage riding on a chunk that also carries text keeps both', () => {
+		const chunk = parseChatChunk(
+			JSON.stringify({ choices: [{ delta: { content: 'hi' } }], usage: { total_tokens: 4 } }),
+		);
+
+		assert.strictEqual(chunk?.text, 'hi');
+		assert.deepStrictEqual(chunk?.usage, { totalTokens: 4 });
+	});
+
+	test('a stream carrying usage in its final chunk emits exactly one Usage event', async () => {
+		const stream = new SseChatStream(
+			bodyFrom([sseBody(textChunk('hi'), usageChunk(LIVE_USAGE), SSE_DONE)]),
+		);
+
+		const events = await drain(stream);
+
+		assert.deepStrictEqual(
+			events.map((event) => event.type),
+			['TextDelta', 'Usage', 'Done'],
+		);
+		assert.deepStrictEqual(
+			(events.find((event) => event.type === 'Usage') as { usage: unknown }).usage,
+			{ promptTokens: 18, completionTokens: 16, totalTokens: 34, reasoningTokens: 16 },
+		);
+	});
+
+	test('a stream that reports no usage emits no Usage event at all', async () => {
+		// Absence is the signal. An event carrying zeros would be indistinguishable
+		// from a genuinely free request once totalled.
+		const stream = new SseChatStream(bodyFrom([sseBody(textChunk('hi'), SSE_DONE)]));
+
+		const events = await drain(stream);
+
+		assert.deepStrictEqual(
+			events.map((event) => event.type),
+			['TextDelta', 'Done'],
+		);
+	});
+
+	test('a usage chunk sent before the answer is not deferred to the end', async () => {
+		// Placement is the server's choice. The event arrives where the data was.
+		const stream = new SseChatStream(
+			bodyFrom([sseBody(usageChunk({ total_tokens: 9 }), textChunk('hi'), SSE_DONE)]),
+		);
+
+		const events = await drain(stream);
+
+		assert.deepStrictEqual(
+			events.map((event) => event.type),
+			['Usage', 'TextDelta', 'Done'],
+		);
+	});
+
+	test('a usage chunk arriving after [DONE] is not read', async () => {
+		const stream = new SseChatStream(
+			bodyFrom([sseBody(textChunk('hi'), SSE_DONE, usageChunk({ total_tokens: 9 }))]),
+		);
+
+		const events = await drain(stream);
+
+		assert.deepStrictEqual(
+			events.filter((event) => event.type === 'Usage').length,
+			0,
+		);
+	});
+
+	test('the first byte is measured from when the request was sent', () => {
+		// One origin for both timings: the caller says when it asked, the stream
+		// reads the clock when the response exists. A total that started later
+		// would exclude the wait, which is the part a slow connection shows up in.
+		let clock = 0;
+		const requestedAt = clock;
+		clock = 420;
+		const stream = new SseChatStream(bodyFrom([sseBody(SSE_DONE)]), undefined, {
+			requestedAt,
+			now: () => clock,
+		});
+
+		assert.strictEqual(stream.timing.firstByteMs, 420);
+	});
+
+	test('a stream reports no total until it has ended', () => {
+		let clock = 0;
+		const requestedAt = clock;
+		clock = 10;
+		const stream = new SseChatStream(bodyFrom([sseBody(SSE_DONE)]), undefined, {
+			requestedAt,
+			now: () => clock,
+		});
+
+		assert.strictEqual(stream.timing.totalMs, undefined);
+	});
+
+	test('the total is measured from when the request was sent', async () => {
+		// A clock the test moves itself: the numbers are asserted, not waited for.
+		let clock = 0;
+		const requestedAt = clock;
+		clock = 420;
+		const stream = new SseChatStream(bodyFrom([sseBody(textChunk('hi'), SSE_DONE)]), undefined, {
+			requestedAt,
+			now: () => clock,
+		});
+
+		clock = 670;
+		await drain(stream);
+
+		// From the moment the request left: 420 waiting for the response, 670 all
+		// told. A total that started at the stream would have read 250 and shown
+		// a slow connection as fast.
+		assert.deepStrictEqual(stream.timing, { firstByteMs: 420, totalMs: 670 });
+	});
+
+	test('a stream the consumer walks away from still reports a total', async () => {
+		let clock = 0;
+		const stream = new SseChatStream(bodyFrom([sseBody(textChunk('hi'), textChunk('more'), SSE_DONE)]), undefined, {
+			requestedAt: 0,
+			now: () => clock,
+		});
+
+		clock = 90;
+		await takeFirst(stream);
+
+		assert.strictEqual(stream.timing.totalMs, 90);
+	});
+
+	test('a stream that fails mid-way still reports a total', async () => {
+		let clock = 0;
+		const stream = new SseChatStream(
+			failingBody([sseBody(textChunk('hi')), sseBody(textChunk('lost'))], 1),
+			undefined,
+			{ requestedAt: 0, now: () => clock },
+		);
+
+		clock = 130;
+		await drain(stream);
+
+		assert.strictEqual(stream.closedReason, 'failed');
+		assert.strictEqual(stream.timing.totalMs, 130);
+	});
+
+	test('an aborted stream reports no timings at all', async () => {
+		const stream = new AbortedChatStream();
+
+		await drain(stream);
+
+		// Not zeros: there was no request that reached a response, so there is
+		// nothing to measure. Zeros would average into a latency figure as though
+		// the provider had answered instantly.
+		assert.deepStrictEqual(stream.timing, {});
+		assert.deepStrictEqual(stream.timing.firstByteMs, undefined);
+		assert.deepStrictEqual(stream.timing.totalMs, undefined);
 	});
 });

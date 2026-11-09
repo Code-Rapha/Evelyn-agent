@@ -677,6 +677,8 @@ suite('Core: runtime drives the real tools', () => {
 				index += 1;
 				return {
 					closedReason: 'completed',
+					// Never measured: this is a fixture, not a request.
+					timing: {},
 					[Symbol.asyncIterator]: async function* () {
 						yield* script;
 					},

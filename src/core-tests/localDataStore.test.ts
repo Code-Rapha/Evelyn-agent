@@ -330,7 +330,7 @@ suite('Storage: local data store', () => {
 		assert.deepStrictEqual(after.map((summary) => summary.id), [first.id, third.id]);
 		assert.strictEqual((await store.getConversation(first.id))?.messages.length, 2);
 		assert.strictEqual(await store.getConversation(second.id), undefined);
-		assert.strictEqual(await store.deleteConversation(second.id), false);
+		assert.strictEqual(await store.deleteConversation(second.id), 'absent');
 	});
 
 	test('conversations can be filtered by project and cascade on delete', async () => {
@@ -537,19 +537,21 @@ suite('Storage: local data store', () => {
 		assert.deepStrictEqual(inConversations.filter((entry) => entry.endsWith('.tmp')), []);
 	});
 
-	test('two concurrent deletes of the same conversation report true then false', async () => {
+	test('two concurrent deletes of the same conversation report deleted then absent', async () => {
 		const store = new FileDataStore({ rootPath: root });
 		const conversation = await store.createConversation({ title: 'Once' });
 		await store.listConversations(); // warm the index the presence check reads
 
 		// Outside the write queue both deletes passed the check before either
-		// removed the file, so both reported `true`.
+		// removed the file, so both reported a removal that only one made.
+		// R4M: inside the queue, exactly one removes and the other finds the
+		// id gone — and says **which** absence it found, not a boolean.
 		const results = await Promise.all([
 			store.deleteConversation(conversation.id),
 			store.deleteConversation(conversation.id),
 		]);
 
-		assert.deepStrictEqual(results, [true, false]);
+		assert.deepStrictEqual([...results].sort(), ['absent', 'deleted']);
 	});
 
 	test('a delete queued behind an append wins and nothing resurrects', async () => {
@@ -563,7 +565,7 @@ suite('Storage: local data store', () => {
 		]);
 
 		assert.strictEqual(appended.content, 'hi');
-		assert.strictEqual(deleted, true);
+		assert.strictEqual(deleted, 'deleted');
 		assert.strictEqual(
 			await store.getConversation(conversation.id),
 			undefined,
@@ -850,7 +852,7 @@ suite('Storage: local data store', () => {
 			listed.map((summary) => summary.title).sort(),
 			['One', 'Three', 'Two'],
 		);
-		assert.strictEqual(await second.deleteConversation(listed[0].id), true);
+		assert.strictEqual(await second.deleteConversation(listed[0].id), 'deleted');
 	});
 });
 

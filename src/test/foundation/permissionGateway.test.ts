@@ -90,6 +90,8 @@ function scriptedProvider(calls: readonly { name: string; args: string; id: stri
 			round += 1;
 			return {
 				closedReason: 'completed',
+				// Never measured: this is a fixture, not a request.
+				timing: {},
 				[Symbol.asyncIterator]: async function* () {
 					yield* script;
 				},
