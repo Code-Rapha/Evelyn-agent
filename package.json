@@ -1,7 +1,7 @@
 {
   "name": "modelhub-vscode",
   "displayName": "ModelHub",
-  "description": "AI model and API management hub for VS Code",
+  "description": "Evelyn: an AI agent with tools, a model router and a supervised DEV mode. This package is the VS Code extension host.",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.134.0"

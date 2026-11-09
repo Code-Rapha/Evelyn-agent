@@ -1,71 +1,86 @@
-# modelhub-vscode README
+# Evelyn
 
-This is the README for your extension "modelhub-vscode". After writing up a brief description, we recommend including the following sections.
+An AI agent that runs on your machine, talks to the providers you choose, and
+can edit its own code under supervision.
 
-## Features
+Two things live in this repository:
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+| | |
+|---|---|
+| **Evelyn** (desktop) | An Electron app: chat, an agent with tools, a model router, a budget ledger and a DEV mode that lets the agent work on this repository. |
+| **ModelHub** (VS Code extension) | The original extension: model and provider management inside the editor. |
 
-For example if there is an image subfolder under your extension project workspace:
+The Core is shared. Both hosts mount it and differ in what they expose to the
+window.
 
-\!\[feature X\]\(images/feature-x.png\)
+## Running it
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+```sh
+npm install
 
-## Requirements
+# The desktop app, from source
+npm run desktop:start
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+# Build a distributable (writes to dist/release/)
+npm run desktop:package
 
-## Extension Settings
+# The local service the app connects to when it is not the Core itself
+npm run web:build
+npm run web:start
+```
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+The packaged app is not the repository. Point it at a checkout with
+`MODELHUB_DEV_ROOT` when you want the DEV mode to find the code.
 
-For example:
+## Tests
 
-This extension contributes the following settings:
+```sh
+npm run test:core       # everything: ~4 minutes
+npm run test:unit       # logic with fakes, ~2 minutes
+npm run test:process    # real processes: the service, the DEV lock helpers
+npm run test:electron   # real windows, ~2 minutes
+npm run test            # the VS Code extension, inside the editor host
+```
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+`test:core` runs 2 651 tests. The split is by what each needs, not by size: a
+process that starts a window is slow and says nothing about a pure function.
 
-## Known Issues
+## The DEV mode
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+An agent that can change its own source is a different proposition from one
+that only answers questions, so the DEV mode is a subsystem of its own:
 
-## Release Notes
+- **a session**, opened and closed by the owner with a local password kept in
+  DPAPI; the agent cannot open it;
+- **checkpoints** before every write, and a restore that refuses a file the
+  user changed afterwards;
+- **a repository lock** shared across processes, with recovery only when the
+  owner is provably gone;
+- **`dev_run`**, which executes an allowlisted command with approval per
+  command, a timeout and an output cap — under the user's permissions, not in
+  a sandbox.
 
-Users appreciate release notes as you update your extension.
+`docs/dev-sandbox-limitations.md` records what was measured when we tried to
+confine `dev_run` in a Windows AppContainer and what blocked it. The DEV does
+not claim an isolation it does not have.
 
-### 1.0.0
+### What is never in this repository
 
-Initial release of ...
+`owner-credential.json`, `unlock.bin`, `secrets.json` and the DEV lock live in
+the data directory (`%USERPROFILE%\.modelhub\` on Windows), never in the
+checkout. Cloning this repository gives you the code; using the DEV mode
+requires configuring your own credential.
 
-### 1.0.1
+## Layout
 
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+```
+src/core/        the Core: agent, providers, routing, DEV subsystem
+src/desktop/     the Electron host and its interface
+src/web/         the local service
+src/host/vscode/ the VS Code extension host
+src/app/         assembly shared by the hosts
+src/adapters/    storage, secrets, logging
+src/core-tests/  the Core suite
+src/test/        the extension suite
+docs/            decisions and limitations
+```
