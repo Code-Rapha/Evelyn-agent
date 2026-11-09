@@ -6,3 +6,12 @@ node_modules
 
 # Stray desktop bundle from an esbuild --production run with the wrong outfile.
 /main.js
+
+# Trava do modo DEV entre processos (criada e removida durante a operação).
+# Ancorada à raiz e também em qualquer subdiretório: o DEV pode apontar para
+# outro checkout dentro deste, e a trava nasce na raiz **daquele** repositório.
+/.evelyn-dev.lock
+**/.evelyn-dev.lock
+
+# Monitor de memória pessoal, não é ferramenta do projeto.
+mem_monitor.py
