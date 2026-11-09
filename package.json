@@ -1,6 +1,6 @@
 {
   "name": "modelhub-vscode",
-  "displayName": "ModelHub",
+  "displayName": "Evelyn",
   "description": "Evelyn: an AI agent with tools, a model router and a supervised DEV mode. This package is the VS Code extension host.",
   "version": "0.0.1",
   "engines": {
@@ -19,7 +19,7 @@
       "activitybar": [
         {
           "id": "modelhub",
-          "title": "ModelHub",
+          "title": "Evelyn",
           "icon": "media/modelhub.svg"
         }
       ]
@@ -28,43 +28,43 @@
       "modelhub": [
         {
           "id": "modelhub.main",
-          "name": "ModelHub"
+          "name": "Evelyn"
         }
       ]
     },
     "viewsWelcome": [
       {
         "view": "modelhub.main",
-        "contents": "ModelHub is active.\nNo providers are registered yet.\n[Refresh](command:modelhub.refresh)"
+        "contents": "Evelyn is active.\nNo providers are registered yet.\n[Refresh](command:modelhub.refresh)"
       }
     ],
     "commands": [
       {
         "command": "modelhub.open",
-        "title": "Open ModelHub",
-        "category": "ModelHub"
+        "title": "Open Evelyn",
+        "category": "Evelyn"
       },
       {
         "command": "modelhub.refresh",
         "title": "Refresh",
-        "category": "ModelHub",
+        "category": "Evelyn",
         "icon": "$(refresh)"
       },
       {
         "command": "modelhub.addProvider",
         "title": "Add Provider",
-        "category": "ModelHub",
+        "category": "Evelyn",
         "icon": "$(add)"
       },
       {
         "command": "modelhub.removeProvider",
         "title": "Remove Provider",
-        "category": "ModelHub"
+        "category": "Evelyn"
       },
       {
         "command": "modelhub.showAbout",
-        "title": "About ModelHub",
-        "category": "ModelHub"
+        "title": "About Evelyn",
+        "category": "Evelyn"
       }
     ],
     "menus": {
@@ -89,7 +89,7 @@
       ]
     },
     "configuration": {
-      "title": "ModelHub",
+      "title": "Evelyn",
       "properties": {
         "modelhub.general.logLevel": {
           "type": "string",
@@ -100,7 +100,7 @@
             "error"
           ],
           "default": "info",
-          "description": "Minimum log level for the ModelHub output channel."
+          "description": "Minimum log level for the Evelyn output channel."
         },
         "modelhub.providers.enableAutoDiscovery": {
           "type": "boolean",
@@ -110,7 +110,7 @@
         "modelhub.agent.enabled": {
           "type": "boolean",
           "default": false,
-          "description": "Reserved for a future phase: enables the ModelHub agent runtime."
+          "description": "Reserved for a future phase: enables the Evelyn agent runtime."
         },
         "modelhub.permissions.defaultLevel": {
           "type": "string",
@@ -130,7 +130,7 @@
         "modelhub.backend.baseUrl": {
           "type": "string",
           "default": "",
-          "description": "Reserved for a future phase: URL of the shared ModelHub backend. Empty means fully local/offline."
+          "description": "Reserved for a future phase: URL of the shared Evelyn backend. Empty means fully local/offline."
         },
         "modelhub.terminal.allowExecution": {
           "type": "boolean",
