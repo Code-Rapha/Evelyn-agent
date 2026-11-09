@@ -23,6 +23,7 @@ import { AgentError } from '../errors';
 import type { AgentTool, ToolDescriptor, ToolExecutionContext, ToolResult } from './types';
 import type { ToolSpec } from './toolRegistry';
 import { Workspace } from './workspace';
+import { acquireDevLock, repositoryRootOf } from '../dev/devFileLock';
 
 /** Tool names. Constants so a host never hardcodes a string literal. */
 export const READ_FILE = 'read_file';
@@ -100,8 +101,27 @@ export function createReadFileTool(): AgentTool<unknown, { readonly path: string
 	};
 }
 
-/** Writes a UTF-8 file inside the workspace, creating parents as needed. */
-export function createWriteFileTool(): AgentTool<unknown, { readonly path: string; readonly bytes: number }> {
+/**
+ * Writes a UTF-8 file inside the workspace, creating parents as needed.
+ *
+ * ## A trava do repositório (DEV-2.3)
+ *
+ * O workspace pode ser a raiz do repositório da Evelyn ou uma subpasta dele.
+ * Quando o destino está dentro de um repositório Git, a escrita adquire a
+ * **mesma** trava que `dev_write`, `dev_run` e `run_command` usam — a por
+ * arquivo, de `devFileLock` —, na mesma ordem (processo → arquivo) e com
+ * liberação em `finally`.
+ *
+ * Sem esse cuidado, o agente comum podia gravar um arquivo no meio de um
+ * `npm run build` que outro processo executava no mesmo repositório.
+ *
+ * Fora de um repositório não há trava a adquirir: um workspace que não é Git
+ * continua sendo escrito como sempre foi, sem espera. A validação de caminho
+ * (`Workspace`) e o risco `moderate` são os mesmos de antes.
+ */
+export function createWriteFileTool(
+	options: { readonly crossProcessWaitMs?: number } = {},
+): AgentTool<unknown, { readonly path: string; readonly bytes: number }> {
 	const descriptor: ToolDescriptor = {
 		id: WRITE_FILE,
 		name: WRITE_FILE,
@@ -117,14 +137,53 @@ export function createWriteFileTool(): AgentTool<unknown, { readonly path: strin
 				const requested = argString(input, 'path');
 				const content = argString(input, 'content');
 				const resolved = await workspace.resolveInsideForCreate(requested);
-				await mkdir(dirname(resolved), { recursive: true });
-				await writeFile(resolved, content, 'utf8');
-				return { ok: true, output: { path: requested, bytes: Buffer.byteLength(content, 'utf8') } };
+				return await withRepositoryLock(resolved, options.crossProcessWaitMs, async () => {
+					// `mkdir` e a escrita dentro da trava: criar um diretório no
+					// repositório também é mudar o repositório.
+					await mkdir(dirname(resolved), { recursive: true });
+					await writeFile(resolved, content, 'utf8');
+					return { ok: true, output: { path: requested, bytes: Buffer.byteLength(content, 'utf8') } };
+				});
 			} catch (error) {
 				return failure(error);
 			}
 		},
 	};
+}
+
+/**
+ * A escrita da ferramenta comum, sob a trava do repositório quando houver um.
+ *
+ * A ordem é a mesma do DEV — processo, depois arquivo — para que dois
+ * caminhos nunca adquiram em ordens opostas (o que seria um deadlock entre
+ * processos). A trava é liberada **depois** de a escrita terminar; o retorno
+ * da ferramenta só acontece com o `finally` executado.
+ */
+async function withRepositoryLock<T>(
+	target: string,
+	waitMs: number | undefined,
+	work: () => Promise<T>,
+): Promise<T> {
+	const root = await repositoryRootOf(dirname(target));
+	if (root === undefined) {
+		// Workspace sem Git: nada a coordenar entre processos.
+		return await work();
+	}
+	const fileLock = await acquireDevLock(root, { waitMs: waitMs ?? 30_000 });
+	if (fileLock.kind !== 'acquired') {
+		// `AgentError` porque `failure()` já sabe transformá-lo em mensagem de
+		// ferramenta — o modelo precisa ler o motivo, não uma exceção crua.
+		throw new AgentError(
+			fileLock.kind === 'busy'
+				? `o repositório está em uso por outra operação (${fileLock.reason}); nada foi escrito`
+				: `não foi possível coordenar a escrita no repositório: ${fileLock.message}`,
+		);
+	}
+	try {
+		return await work();
+	} finally {
+		await fileLock.lock.release();
+	}
 }
 
 /** One entry in a directory listing. */
@@ -352,10 +411,10 @@ export const MVP_TOOL_SPECS: readonly ToolSpec[] = [
 ];
 
 /** The four MVP tools, ready to register. */
-export function createMvpTools(runner?: CommandRunner): readonly AgentTool[] {
+export function createMvpTools(runner?: CommandRunner, crossProcessWaitMs?: number): readonly AgentTool[] {
 	return [
 		createReadFileTool(),
-		createWriteFileTool(),
+		createWriteFileTool({ ...(crossProcessWaitMs !== undefined ? { crossProcessWaitMs } : {}) }),
 		createListFilesTool(),
 		createRunCommandTool(runner),
 	];

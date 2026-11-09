@@ -12,9 +12,13 @@
  */
 import { ToolRegistry } from './toolRegistry';
 import { MVP_TOOL_SPECS, createMvpTools, type CommandRunner } from './mvpTools';
+import { MEMORY_TOOL_SPECS, createMemoryTools } from './memoryTools';
+import { SKILL_TOOL_SPECS, createSkillTools } from './skillTools';
 import type { AgentTool } from './types';
 import { allowAllGateway as allowAll } from '../permissions/gateway';
 import type { PermissionPort } from './runtime';
+import type { MemoryService } from '../memory/types';
+import type { SkillService } from '../skill/types';
 
 /** What a composition needs in order to wire an agent. */
 export interface AgentStack {
@@ -33,12 +37,23 @@ export interface AgentStack {
 export function createMvpAgentStack(options: {
 	/** Defaults to the real runner. Tests inject a fake. */
 	readonly commandRunner?: CommandRunner;
+	/** Optional memory service for memory tools. */
+	readonly memoryService?: MemoryService;
+	/** Optional skill service for skill tools. */
+	readonly skillService?: SkillService;
 	readonly extraTools?: readonly { readonly tool: AgentTool; readonly spec: ToolSpecLike }[];
+	/**
+	 * Quanto `write_file` espera a trava do repositório (DEV-2.3).
+	 *
+	 * Padrão: 30 s. O teste usa um prazo curto para provar a recusa sem
+	 * esperar meio minuto.
+	 */
+	readonly crossProcessWaitMs?: number;
 }): AgentStack {
 	const registry = new ToolRegistry();
 	const unregisters: Array<() => void> = [];
 
-	const tools = createMvpTools(options.commandRunner);
+	const tools = createMvpTools(options.commandRunner, options.crossProcessWaitMs);
 	for (const tool of tools) {
 		const spec = MVP_TOOL_SPECS.find((candidate) => candidate.name === tool.descriptor.name);
 		if (spec === undefined) {
@@ -47,6 +62,30 @@ export function createMvpAgentStack(options: {
 			throw new Error(`No spec declared for tool "${tool.descriptor.name}"`);
 		}
 		unregisters.push(registry.register(tool, spec));
+	}
+
+	// Add memory tools if memory service is provided
+	if (options.memoryService !== undefined) {
+		const memoryTools = createMemoryTools(options.memoryService);
+		for (const tool of memoryTools) {
+			const spec = MEMORY_TOOL_SPECS.find((candidate) => candidate.name === tool.descriptor.name);
+			if (spec === undefined) {
+				throw new Error(`No spec declared for memory tool "${tool.descriptor.name}"`);
+			}
+			unregisters.push(registry.register(tool, spec));
+		}
+	}
+
+	// Add skill tools if skill service is provided
+	if (options.skillService !== undefined) {
+		const skillTools = createSkillTools(options.skillService);
+		for (const tool of skillTools) {
+			const spec = SKILL_TOOL_SPECS.find((candidate) => candidate.name === tool.descriptor.name);
+			if (spec === undefined) {
+				throw new Error(`No spec declared for skill tool "${tool.descriptor.name}"`);
+			}
+			unregisters.push(registry.register(tool, spec));
+		}
 	}
 
 	for (const extra of options.extraTools ?? []) {

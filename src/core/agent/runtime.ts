@@ -51,10 +51,28 @@ export interface AgentRuntimeOptions {
 	/** Model used when the caller does not name one. */
 	readonly defaultModel?: string;
 	/**
-	 * Hard cap on provider round-trips per turn. Defaults to 8, which is far
-	 * more than a normal answer needs and low enough to stop a runaway loop.
+	 * Hard cap on provider round-trips per turn.
+	 *
+	 * Defaults to `DEFAULT_MAX_TURNS`. The cap is a safety net against a model
+	 * that loops forever, **not** a task budget: a task with several stages
+	 * needs more round-trips than an answer does, and stopping it at a fixed
+	 * count reads to the user as "the Evelyn gave up in the middle". The host
+	 * raises it when the turn is a task; the retry budget below is what
+	 * actually bounds a stuck tool.
 	 */
 	readonly maxTurns?: number;
+	/**
+	 * Quantas vezes uma ferramenta com erro **transitório** é tentada de novo.
+	 *
+	 * O padrão é 2 novas tentativas (3 execuções). A nova tentativa acontece
+	 * com espera crescente e só quando o erro é classificável como
+	 * transitório — uma recusa de permissão, um caminho inválido ou um
+	 * argumento malformado não são tentados de novo, porque repeti-los só
+	 * gastaria tempo para falhar igual.
+	 */
+	readonly toolRetries?: number;
+	/** Espera base entre tentativas, em ms. Cresce linearmente. */
+	readonly retryDelayMs?: number;
 	/** Working directory handed to every tool's execution context. */
 	readonly workingDirectory?: string;
 	/**
@@ -78,13 +96,27 @@ export interface TurnInput {
 	readonly messages: readonly ChatMessage[];
 }
 
+/**
+ * O teto de segurança para um turno **sem** tarefa declarada.
+ *
+ * Continua sendo uma rede contra um modelo em laço, não um orçamento de
+ * tarefa: quem tem tarefa de várias etapas sobe o teto explicitamente.
+ */
 const DEFAULT_MAX_TURNS = 8;
+
+/** Novas tentativas padrão de uma ferramenta com erro transitório. */
+const DEFAULT_TOOL_RETRIES = 2;
+
+/** Espera base entre novas tentativas de ferramenta, em ms. */
+const DEFAULT_RETRY_DELAY_MS = 250;
 
 export class ConversationRuntime {
 	private readonly provider: ChatProvider;
 	private readonly tools: ToolRegistry;
 	private readonly gateway: PermissionPort;
 	private readonly maxTurns: number;
+	private readonly toolRetries: number;
+	private readonly retryDelayMs: number;
 	private readonly workingDirectory: string | undefined;
 
 	private sessionCounter = 0;
@@ -107,6 +139,8 @@ export class ConversationRuntime {
 		this.tools = options.tools;
 		this.gateway = options.permissions;
 		this.maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
+		this.toolRetries = Math.max(0, options.toolRetries ?? DEFAULT_TOOL_RETRIES);
+		this.retryDelayMs = Math.max(0, options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS);
 		this.workingDirectory = options.workingDirectory;
 	}
 
@@ -402,17 +436,44 @@ export class ConversationRuntime {
 		}
 
 		let result;
-		try {
-			result = await tool.execute(call.arguments ?? {}, {
-				sessionId: 'runtime',
-				...(this.workingDirectory !== undefined
-					? { workingDirectory: this.workingDirectory }
-					: {}),
-				// Passed through so a blocking tool can stop when the user does.
-				...(this.turnSignal !== undefined ? { signal: this.turnSignal } : {}),
+		let attempt = 0;
+		for (;;) {
+			try {
+				result = await tool.execute(call.arguments ?? {}, {
+					sessionId: 'runtime',
+					...(this.workingDirectory !== undefined
+						? { workingDirectory: this.workingDirectory }
+						: {}),
+					// Passed through so a blocking tool can stop when the user does.
+					...(this.turnSignal !== undefined ? { signal: this.turnSignal } : {}),
+				});
+			} catch (error) {
+				result = { ok: false as const, error: toError(error).message, output: undefined };
+			}
+
+			// A falha **transitória** é tentada de novo: a trava ainda ocupada,
+			// a rede que caiu, o arquivo que estava sendo escrito. A tarefa não
+			// termina por isso — é o que o usuário vê como "a Evelyn desistiu".
+			const transient = !result.ok && isTransientFailure(result.error ?? '');
+			const aborted = this.isAborted(this.turnSignal);
+			if (!transient || attempt >= this.toolRetries || aborted) {
+				break;
+			}
+			attempt += 1;
+			// O modelo e o host ficam sabendo da nova tentativa: sem o evento,
+			// a ferramenta pareceria demorar mais sem motivo.
+			this.pendingEvents.push({
+				type: 'ToolRetry',
+				callId: call.id,
+				toolName: call.name,
+				attempt,
+				of: this.toolRetries,
+				reason: result.error ?? '',
 			});
-		} catch (error) {
-			return `ERROR: "${call.name}" threw: ${toError(error).message}`;
+			await delay(this.retryDelayMs * attempt, this.turnSignal);
+			if (this.isAborted(this.turnSignal)) {
+				break;
+			}
 		}
 
 		if (!result.ok) {
@@ -482,6 +543,52 @@ export async function toAgentTurn(
 
 /** Prefix every failed tool result carries, by convention. */
 const TOOL_ERROR_PREFIX = 'ERROR:';
+
+/**
+ * Erros que valem uma nova tentativa.
+ *
+ * A lista é intencionalmente **estreita**: só o que é, por natureza, passageiro
+ * — o recurso ocupado, a rede, o arquivo que estava aberto. Um caminho fora do
+ * escopo, uma permissão recusada e argumentos inválidos não entram: repetir
+ * esses gastaria o orçamento da tarefa para falhar igual.
+ */
+const TRANSIENT_PATTERNS: readonly RegExp[] = [
+	/em uso por (outro|outra)|está ocupad|está em uso/i,
+	/dev_busy|dev_lock_timeout/i,
+	/\bEBUSY\b|\bETXTBSY\b|\bEAGAIN\b|\bEACCES\b|\bEPERM\b|\bEMFILE\b|\bENFILE\b/,
+	/\bECONNRESET\b|\bECONNREFUSED\b|\bETIMEDOUT\b|\bEAI_AGAIN\b|\bENOTFOUND\b|\bEPIPE\b/,
+	/\btime(d)? out\b|\btimeout\b|\btimed out\b/i,
+	/temporar(y|ily)|transient|retry|tente de novo/i,
+	/network error|fetch failed|socket hang up/i,
+];
+
+/** A falha desta ferramenta pode passar com uma nova tentativa? */
+export function isTransientFailure(message: string): boolean {
+	return TRANSIENT_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+/**
+ * Espera entre tentativas, cancelável.
+ *
+ * Sem o sinal, um turno parado durante a espera continuaria dormindo até o
+ * fim do atraso antes de perceber — e a parada pareceria lenta.
+ */
+function delay(ms: number, signal: AbortSignal | undefined): Promise<void> {
+	if (ms <= 0 || signal?.aborted === true) {
+		return Promise.resolve();
+	}
+	return new Promise<void>((resolve) => {
+		const timer = setTimeout(() => {
+			signal?.removeEventListener('abort', onAbort);
+			resolve();
+		}, ms);
+		function onAbort(): void {
+			clearTimeout(timer);
+			resolve();
+		}
+		signal?.addEventListener('abort', onAbort, { once: true });
+	});
+}
 
 /**
  * Reconciles a second reading of one call's arguments.

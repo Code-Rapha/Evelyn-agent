@@ -21,6 +21,7 @@ export type ToolCategory =
 	| 'git'
 	| 'editor'
 	| 'network'
+	| 'memory'
 	| 'other';
 
 export interface ToolDescriptor {
@@ -94,6 +95,20 @@ export type AgentEvent =
 	 * what the model was actually told instead of guessing at the reason.
 	 */
 	| { readonly type: 'ToolCompleted'; readonly callId: string; readonly ok: boolean; readonly output: string }
+	/**
+	 * Uma ferramenta falhou de um jeito passageiro e vai ser tentada de novo.
+	 *
+	 * Existe para o host distinguir **espera** de **erro**: sem este evento, a
+	 * diferença entre "rodando" e "vai falhar" seria só a demora.
+	 */
+	| {
+			readonly type: 'ToolRetry';
+			readonly callId: string;
+			readonly toolName: string;
+			readonly attempt: number;
+			readonly of: number;
+			readonly reason: string;
+	  }
 	| { readonly type: 'TurnCompleted'; readonly reason: CompletionReason }
 	| { readonly type: 'TurnFailed'; readonly error: Error };
 
