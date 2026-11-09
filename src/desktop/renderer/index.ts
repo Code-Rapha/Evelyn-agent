@@ -1973,10 +1973,13 @@ function renderRouterPanel(): void {
 	const history = state.executionHistory[0];
 	if (history === undefined) {
 		last.textContent = 'Nenhuma requisição registrada ainda.';
+		last.title = '';
 	} else {
 		last.textContent = describeLastDecision(history);
+		last.title = describeLastDecisionDetail(history);
 	}
 	monitor.textContent = describeRouterMonitoring();
+	monitor.title = describeRouterMonitoringDetail();
 }
 
 /** O nome do modo, com a diferença que importa. */
@@ -2007,13 +2010,36 @@ function routerTargetOf(config: RouterConfigView): { readonly id: string; readon
 }
 
 /**
+ * A última decisão, na linha curta do painel.
+ *
+ * De relance: o resultado e o modelo. Quem decide já está no chip do modo
+ * acima; o motivo — quem escolheu e por quê — fica no `title` da linha
+ * (`describeLastDecisionDetail`) e no relatório completo do Orçamento.
+ */
+function describeLastDecision(execution: HistoryExecutionView): string {
+	const report = execution.report;
+	const routing = report.routing;
+	const result = report.result;
+	if (routing === undefined) {
+		return report.chosen === undefined ? result : `${result} · ${report.chosen.modelId}`;
+	}
+	if (routing.respondedModel === undefined) {
+		return `${result} · pediu ${routing.requestedModel}`;
+	}
+	if (routing.respondedModel !== routing.requestedModel) {
+		return `${result} · pediu ${routing.requestedModel}, respondeu ${routing.respondedModel}`;
+	}
+	return `${result} · ${routing.respondedModel}`;
+}
+
+/**
  * A última decisão, em uma linha.
  *
  * No modo externo, quem escolheu o modelo é o roteador — e a linha diz isso.
  * Quando o servidor não publicou o modelo que respondeu, a linha diz que não
  * se sabe, em vez de afirmar que o modelo pedido respondeu.
  */
-function describeLastDecision(execution: HistoryExecutionView): string {
+function describeLastDecisionDetail(execution: HistoryExecutionView): string {
 	const report = execution.report;
 	const parts: string[] = [];
 	parts.push(`última requisição: ${report.result}`);
@@ -2043,13 +2069,45 @@ function describeLastDecision(execution: HistoryExecutionView): string {
 }
 
 /**
+ * O monitoramento, na linha curta do painel.
+ *
+ * A mesma regra da versão completa — só o que muda o resultado de um turno —,
+ * sem os motivos: um custo desconhecido não precisa repetir, todo turno, por
+ * quê o é. Os motivos ficam no `title` da linha
+ * (`describeRouterMonitoringDetail`) e no painel Orçamento.
+ */
+function describeRouterMonitoring(): string {
+	const parts: string[] = [];
+	const report = state.budgetReport;
+	if (report !== undefined) {
+		parts.push(`consumo: ${describeBudgetUsageShort(report)}`);
+		const cost = report.total.cost;
+		parts.push(`custo: ${cost.status === 'estimated' ? formatMoney(cost.total, cost.currency) : 'desconhecido'}`);
+	} else {
+		parts.push('consumo: desconhecido');
+	}
+	const quotas = state.quotas;
+	if (quotas.length === 0) {
+		parts.push('cotas: nenhuma');
+	} else {
+		const exhausted = quotas.filter((quota) => quota.account?.remaining === 0).length;
+		parts.push(
+			exhausted === 0
+				? `cotas: ${quotas.length}`
+				: `cotas: ${quotas.length} · ${exhausted} esgotada${exhausted === 1 ? '' : 's'}`,
+		);
+	}
+	return parts.join(' · ');
+}
+
+/**
  * O monitoramento, em uma linha.
  *
  * Só o que muda o resultado de um turno: o consumo, o custo **conhecido** e a
  * situação das cotas. O que não é medido é dito como não medido — um "0"
  * onde houve medição é um número, e um "0" onde não houve é uma mentira.
  */
-function describeRouterMonitoring(): string {
+function describeRouterMonitoringDetail(): string {
 	const parts: string[] = [];
 	const report = state.budgetReport;
 	if (report !== undefined) {
@@ -2130,7 +2188,10 @@ function describeBudgetUsageShort(report: BudgetReportView): string {
 		tokens !== undefined
 			? ` · ${(tokens.input ?? 0).toLocaleString('pt-BR')} in / ${(tokens.output ?? 0).toLocaleString('pt-BR')} out`
 			: '';
-	return `${usage.executions} exec · ${usage.attempts} tent${tokenText}`;
+	// A mesma contagem de tentativas não é notícia: só quando há mais tentativas
+	// que execuções a diferença aparece na linha.
+	const retries = usage.attempts === usage.executions ? '' : ` · ${usage.attempts} tent`;
+	return `${usage.executions} exec${retries}${tokenText}`;
 }
 
 const SCOPE_LABEL: Readonly<Record<SpendingLimitView['scope'], string>> = {
@@ -2995,7 +3056,7 @@ function renderMessages(): void {
 							? `Tool failed · ${message.toolName ?? 'result'}`
 							: message.role === 'error'
 								? 'Error'
-								: 'Assistant';
+								: 'Evelyn';
 
 		const bubble = document.createElement('div');
 		bubble.className = 'bubble';
