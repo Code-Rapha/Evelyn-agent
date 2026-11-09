@@ -24,6 +24,7 @@ import type { AgentTool, ToolDescriptor, ToolExecutionContext, ToolResult } from
 import type { ToolSpec } from './toolRegistry';
 import { Workspace } from './workspace';
 import { acquireDevLock, repositoryRootOf } from '../dev/devFileLock';
+import { resolveCommand } from '../dev/devRunner';
 
 /** Tool names. Constants so a host never hardcodes a string literal. */
 export const READ_FILE = 'read_file';
@@ -264,17 +265,91 @@ export interface CommandRunner {
 	}>;
 }
 
-/** Default runner: no shell, so a command string is never word-split. */
-export const defaultCommandRunner: CommandRunner = (command, cwd, signal) =>
-	new Promise((resolve, reject) => {
-		// `shell: false` on purpose. With a shell, a command containing `;` or
-		// `&&` would run something the user never approved as one action.
-		const child = spawn(command, {
+/**
+ * Divide a linha de comando em programa e argumentos, sem shell.
+ *
+ * ## Por que isso existe
+ *
+ * `spawn(command, { shell: false })` espera **o executável**, não uma linha:
+ * `spawn("node --version")` procura um programa com esse nome inteiro e
+ * devolve `ENOENT`. Era o que acontecia com todo `run_command` com argumento
+ * — medido: `node --version`, `git status` e `echo oi` falhavam, e só o
+ * binário puro (`node`) rodava. O modelo recebia `spawn node --version ENOENT`
+ * e concluía, com razão, que a ferramenta só executava binário sem argumentos.
+ *
+ * A separação é feita aqui, e o `shell` continua desligado por decisão: com
+ * um shell, `;` ou `&&` rodariam algo que a pessoa não aprovou como uma ação.
+ * O preço é que as regras de aspas são as nossas, e não as do `cmd.exe`.
+ *
+ * Aceita aspas simples e duplas para manter um argumento com espaço inteiro;
+ * o que fica em aspas perde o sentido especial. Sem aspas, o espaço separa.
+ */
+export function splitCommandLine(command: string): { readonly file: string; readonly args: readonly string[] } {
+	const parts: string[] = [];
+	let current = '';
+	let quote: '"' | "'" | undefined;
+	let started = false;
+	for (const character of command) {
+		if (quote !== undefined) {
+			if (character === quote) {
+				quote = undefined;
+			} else {
+				current += character;
+			}
+			continue;
+		}
+		if (character === '"' || character === "'") {
+			quote = character;
+			started = true;
+			continue;
+		}
+		if (character === ' ' || character === '\t' || character === '\n' || character === '\r') {
+			if (started) {
+				parts.push(current);
+				current = '';
+				started = false;
+			}
+			continue;
+		}
+		current += character;
+		started = true;
+	}
+	if (started) {
+		parts.push(current);
+	}
+	const [file, ...args] = parts;
+	if (file === undefined || file.length === 0) {
+		throw new AgentError('the command is empty');
+	}
+	return { file, args };
+}
+
+/**
+ * Default runner: no shell, so `;` and `&&` never chain a second action.
+ *
+ * A linha é dividida em programa e argumentos **antes** do `spawn`: com
+ * `shell: false`, uma linha inteira seria procurada como o nome do programa.
+ */
+export const defaultCommandRunner: CommandRunner = async (command, cwd, signal) => {
+	// `shell: false` on purpose. With a shell, a command containing `;` or
+	// `&&` would run something the user never approved as one action.
+	const { file, args } = splitCommandLine(command);
+	// `resolveCommand` aplica `PATHEXT` no Windows e manda `.cmd`/`.bat` pelo
+	// `cmd.exe` — sem isso, `npm` e `git` falham com `EINVAL`, porque o Node
+	// recusa um batch com `shell: false`.
+	const launched = await resolveCommand(file, args).catch((error: unknown) => {
+		throw new AgentError(error instanceof Error ? error.message : String(error));
+	});
+	return await new Promise((resolve, reject) => {
+		const child = spawn(launched.file, [...launched.args], {
 			cwd,
 			shell: false,
 			stdio: ['ignore', 'pipe', 'pipe'],
 			...(signal !== undefined ? { signal } : {}),
 			windowsHide: true,
+			// Só no caminho do `cmd.exe`: a linha já está entre aspas e não deve
+			// ganhar outra camada de escape do Node.
+			windowsVerbatimArguments: launched.viaShell,
 		});
 
 		let stdout = '';
@@ -303,6 +378,7 @@ export const defaultCommandRunner: CommandRunner = (command, cwd, signal) =>
 			child.kill();
 		});
 	});
+};
 
 /**
  * Runs a command in the workspace.
@@ -315,7 +391,10 @@ export const defaultCommandRunner: CommandRunner = (command, cwd, signal) =>
  * host can impose its own policy (a sandbox, a resource limit) without this
  * file changing.
  */
-export function createRunCommandTool(runner: CommandRunner = defaultCommandRunner): AgentTool<unknown, CommandOutcome> {
+export function createRunCommandTool(
+	runner: CommandRunner = defaultCommandRunner,
+	options: { readonly devSession?: { isActive(): boolean } } = {},
+): AgentTool<unknown, CommandOutcome> {
 	const descriptor: ToolDescriptor = {
 		id: RUN_COMMAND,
 		name: RUN_COMMAND,
@@ -327,6 +406,28 @@ export function createRunCommandTool(runner: CommandRunner = defaultCommandRunne
 		descriptor,
 		async execute(input, context): Promise<ToolResult<CommandOutcome>> {
 			try {
+				// DEV-10: com o modo DEV ativo, `run_command` não executa neste
+				// repositório sem passar por checkpoint.
+				//
+				// Medido: a agente editou `src/desktop/renderer/index.ts` com um
+				// script via `run_command`, contornando o `dev_write`. Nenhum
+				// checkpoint foi criado, a operação nunca entrou no diário, e o
+				// `reload-ui` não teve o que aplicar — a janela continuou com o
+				// código velho. O arquivo podia ter sido corrompido sem volta.
+				//
+				// A escrita no repositório durante uma sessão DEV passa por
+				// `dev_edit`/`dev_write`, que criam checkpoint e registram a
+				// operação. `run_command` continua disponível para leitura e
+				// para o que roda fora do repositório autorizado.
+				if (options.devSession?.isActive() === true) {
+					return {
+						ok: false,
+						error:
+							'com o modo DEV ativo, `run_command` não executa neste repositório: uma escrita sem checkpoint ' +
+							'não tem como ser desfeita. Use `dev_run` para verificação, e `dev_edit` ou `dev_write` para ' +
+							'alterar arquivos — os dois criam checkpoint e ficam aplicáveis.',
+					};
+				}
 				const workspace = requireWorkspace(context, RUN_COMMAND);
 				const command = argString(input, 'command');
 				// Resolve the workspace so the child cannot start somewhere else,
@@ -411,11 +512,15 @@ export const MVP_TOOL_SPECS: readonly ToolSpec[] = [
 ];
 
 /** The four MVP tools, ready to register. */
-export function createMvpTools(runner?: CommandRunner, crossProcessWaitMs?: number): readonly AgentTool[] {
+export function createMvpTools(
+	runner?: CommandRunner,
+	crossProcessWaitMs?: number,
+	devSession?: { isActive(): boolean },
+): readonly AgentTool[] {
 	return [
 		createReadFileTool(),
 		createWriteFileTool({ ...(crossProcessWaitMs !== undefined ? { crossProcessWaitMs } : {}) }),
 		createListFilesTool(),
-		createRunCommandTool(runner),
+		createRunCommandTool(runner, { ...(devSession !== undefined ? { devSession } : {}) }),
 	];
 }

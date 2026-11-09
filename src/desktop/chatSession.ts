@@ -4669,6 +4669,9 @@ export class ChatSession {
 				...(this.dev !== undefined
 					? {
 							commandRunner: coordinateCommandRunner(defaultCommandRunner, this.dev.locks),
+							// DEV-10: com a sessão ativa, `run_command` recusa em vez de
+							// escrever sem checkpoint.
+							devSession: this.dev.session,
 						}
 					: {}),
 				// DEV-2: as ferramentas do modo DEV, quando o host oferece a

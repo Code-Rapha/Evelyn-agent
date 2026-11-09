@@ -49,11 +49,20 @@ export function createMvpAgentStack(options: {
 	 * esperar meio minuto.
 	 */
 	readonly crossProcessWaitMs?: number;
+	/**
+	 * A sessão DEV, quando o host tem uma (DEV-10).
+	 *
+	 * Com ela ativa, `run_command` deixa de executar no repositório: uma
+	 * escrita por comando não passa pelo checkpoint, e a operação não chega ao
+	 * diário — foi assim que uma edição ficou sem como ser desfeita e sem
+	 * como ser aplicada.
+	 */
+	readonly devSession?: { isActive(): boolean };
 }): AgentStack {
 	const registry = new ToolRegistry();
 	const unregisters: Array<() => void> = [];
 
-	const tools = createMvpTools(options.commandRunner, options.crossProcessWaitMs);
+	const tools = createMvpTools(options.commandRunner, options.crossProcessWaitMs, options.devSession);
 	for (const tool of tools) {
 		const spec = MVP_TOOL_SPECS.find((candidate) => candidate.name === tool.descriptor.name);
 		if (spec === undefined) {
