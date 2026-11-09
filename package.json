@@ -159,11 +159,16 @@
     "lint": "eslint src",
     "test": "vscode-test",
     "pretest:core": "npm run compile-tests",
-    "test:core": "mocha --ui tdd out/core-tests/**/*.test.js",
+    "test:core": "mocha --ui tdd --timeout 40000 out/core-tests/**/*.test.js",
+    "test:unit": "mocha --ui tdd --timeout 40000 \"out/core-tests/**/*.test.js\" --ignore \"out/core-tests/desktopBoundary.test.js\" --ignore \"out/core-tests/desktopConnected.integration.test.js\" --ignore \"out/core-tests/dev5Electron.test.js\" --ignore \"out/core-tests/dev6Continuity.test.js\" --ignore \"out/core-tests/dev6Electron.test.js\" --ignore \"out/core-tests/devHost.integration.test.js\" --ignore \"out/core-tests/devPanel.test.js\" --ignore \"out/core-tests/serviceClient.integration.test.js\" --ignore \"out/core-tests/serviceElectron.integration.test.js\" --ignore \"out/core-tests/devCrossProcess.test.js\" --ignore \"out/core-tests/devRunControl.test.js\" --ignore \"out/core-tests/serviceLifecycle.integration.test.js\" --ignore \"out/core-tests/turnCrash.integration.test.js\" --ignore \"out/core-tests/turnRetention.integration.test.js\" --ignore \"out/core-tests/turnsRecovery.test.js\" --ignore \"out/core-tests/webChatCreate.integration.test.js\" --ignore \"out/core-tests/webChatHistory.integration.test.js\" --ignore \"out/core-tests/webChatManage.integration.test.js\" --ignore \"out/core-tests/writeFileLock.test.js\"",
+    "test:electron": "npm run desktop:build && mocha --ui tdd --timeout 120000 out/core-tests/desktopBoundary.test.js out/core-tests/desktopConnected.integration.test.js out/core-tests/dev5Electron.test.js out/core-tests/dev6Continuity.test.js out/core-tests/dev6Electron.test.js out/core-tests/devHost.integration.test.js out/core-tests/devPanel.test.js out/core-tests/serviceClient.integration.test.js out/core-tests/serviceElectron.integration.test.js",
+    "test:process": "npm run web:build && mocha --ui tdd --timeout 60000 out/core-tests/devCrossProcess.test.js out/core-tests/devRunControl.test.js out/core-tests/serviceLifecycle.integration.test.js out/core-tests/turnCrash.integration.test.js out/core-tests/turnRetention.integration.test.js out/core-tests/turnsRecovery.test.js out/core-tests/webChatCreate.integration.test.js out/core-tests/webChatHistory.integration.test.js out/core-tests/webChatManage.integration.test.js out/core-tests/writeFileLock.test.js",
     "desktop:build": "node esbuild.desktop.js",
     "desktop:watch": "node esbuild.desktop.js --watch",
     "desktop:start": "npm run desktop:build && electron dist/desktop/main.js",
-    "desktop:package": "npm run check-types && npm run lint && node esbuild.desktop.js --production && node package.desktop.js"
+    "desktop:package": "npm run check-types && npm run lint && node esbuild.desktop.js --production && node package.desktop.js",
+    "web:build": "node esbuild.web.js",
+    "web:start": "node dist/web/main.js"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",

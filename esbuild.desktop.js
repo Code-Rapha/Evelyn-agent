@@ -69,6 +69,28 @@ async function copyRendererAssets() {
 }
 
 /**
+ * Copies the app icon next to the bundle.
+ *
+ * Vai para `dist/desktop`, que é a pasta que o `package.desktop.js` empacota
+ * inteira: o ícone precisa estar **dentro** do app para a janela o achar em
+ * tempo de execução (`__dirname`), tanto em `npm run desktop:start` quanto no
+ * pacote com `asar`. Um caminho para `icons/` na raiz não existiria no pacote.
+ *
+ * É o `.ico` — o formato que o Windows usa para a barra de tarefas e o
+ * executável. O PNG de ~3 MB fica fora: é arte-fonte, não ícone de janela.
+ */
+async function copyIcon() {
+	await cp(join(root, 'icons', APP_ICON), join(outDir, APP_ICON)).catch((error) => {
+		// Sem ícone o app funciona: o Windows desenha o padrão do Electron.
+		// O aviso é aqui, no build, e não um `try` silencioso no main.
+		console.warn(`[icon] ${APP_ICON} não encontrado em icons/: ${error.message}`);
+	});
+}
+
+/** O nome do arquivo de ícone, usado pelo build, pelo main e pelo empacotador. */
+const APP_ICON = 'evelyn_app_icon.ico';
+
+/**
  * Writes the manifest of the *packaged* app.
  *
  * `dist/desktop` has to be a self-contained Electron app directory: the root
@@ -85,11 +107,15 @@ async function writeAppManifest() {
 		join(outDir, 'package.json'),
 		`${JSON.stringify(
 			{
+				// O `name` do manifesto é de onde o Electron deriva o caminho
+				// de dados (app.getPath('userData')): trocá-lo moveria, por
+				// consequência, todos os dados do app. Fica; o nome visível é
+				// o `productName`.
 				name: 'seshyina',
-				productName: 'Seshyina',
+				productName: 'Evelyn',
 				version,
 				private: true,
-				description: 'Seshyina desktop chat',
+				description: 'Evelyn desktop chat',
 				main: 'main.js',
 			},
 			null,
@@ -100,6 +126,7 @@ async function writeAppManifest() {
 
 async function main() {
 	await copyRendererAssets();
+	await copyIcon();
 	await writeAppManifest();
 
 	const builds = [
