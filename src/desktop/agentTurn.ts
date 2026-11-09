@@ -28,13 +28,15 @@
  *   rather than a half-written one.
  */
 import type { AgentEvent } from '../core/agent/types';
-import type { PermissionPrompt } from './contract';
+import type { AbortCause, PermissionPrompt } from './contract';
 import type { ConversationRuntime } from '../core/agent/runtime';
 import type { ToolRegistry } from '../core/agent/toolRegistry';
 import type { PermissionGateway } from '../core/permissions/gateway';
 import type { ChatMessage, ToolCallRequest } from '../core/providers/chat/types';
 import type { ConversationRecord } from '../core/storage/types/dataStore';
 import type { RecordingTool } from './toolRecorder';
+import type { SkillDiscoveryService } from '../core/skill/types';
+import { createSeshyinaAgentSystemMessage, hasSeshyinaIdentity } from '../core/agent/seshyinaAgent';
 
 /** What the UI is told about a tool the model asked for. */
 export interface ToolCallSummary {
@@ -54,7 +56,16 @@ export interface ToolCallSummary {
  * renderer has a single switch rather than two parallel paths.
  */
 export type AgentUiEvent =
-	| { readonly type: 'started'; readonly turnId: string }
+	| {
+			readonly type: 'started';
+			readonly turnId: string;
+			/** O modo e o par efetivo do turno, quando o host os conhece. */
+			readonly routing?: {
+				readonly mode: 'auto' | 'direct' | 'external';
+				readonly providerId?: string;
+				readonly model?: string;
+			};
+	  }
 	| { readonly type: 'delta'; readonly turnId: string; readonly text: string }
 	| {
 			readonly type: 'toolCall';
@@ -73,6 +84,22 @@ export type AgentUiEvent =
 			readonly output: string;
 	  }
 	| {
+			/**
+			 * Uma ferramenta falhou de um jeito passageiro e vai tentar de novo.
+			 *
+			 * A interface distingue isto de `toolResult` com `ok: false`: o
+			 * segundo é o desfecho, o primeiro é uma **espera** que pode ainda
+			 * terminar bem.
+			 */
+			readonly type: 'toolRetry';
+			readonly turnId: string;
+			readonly callId: string;
+			readonly name: string;
+			readonly attempt: number;
+			readonly of: number;
+			readonly reason: string;
+	  }
+	| {
 			/** A tool needs the user's answer before it may run. */
 			readonly type: 'permissionRequested';
 			readonly turnId: string;
@@ -85,8 +112,39 @@ export type AgentUiEvent =
 			readonly id: string;
 			readonly toolName: string;
 			readonly decision: 'allow' | 'deny';
-			/** Why the answer was what it was: the user, or a cancellation. */
-			readonly source: 'user' | 'cancelled';
+			/**
+			 * Why the answer was what it was: the user, a cancellation, a
+			 * leitura automática, ou uma concessão de escopo da tarefa.
+			 *
+			 * A interface distingue as quatro — uma permissão que aparece sem
+			 * ninguém ter sido perguntado precisa dizer por quê.
+			 */
+			readonly source: 'user' | 'cancelled' | 'automatic' | 'grant';
+			/** O escopo que autorizou, quando `source` é `automatic` ou `grant`. */
+			readonly scope?: string;
+	  }
+	| {
+			readonly type: 'skillsLoaded';
+			readonly turnId: string;
+			/** IDs of skills that were loaded and injected into the context. */
+			readonly skillIds: readonly string[];
+			/** Whether any explicitly requested skills were not found. */
+			readonly missing?: readonly string[];
+	  }
+	| {
+			/**
+			 * Um candidato pago não foi chamado porque um limite de orçamento o
+			 * vetou.
+			 *
+			 * Não é um erro do modelo nem do turno: o turno pode ter seguido em
+			 * outro modelo. `message` já vem pronta para o usuário.
+			 */
+			readonly type: 'budgetBlocked';
+			readonly turnId: string;
+			readonly providerId: string;
+			readonly modelId: string;
+			readonly attempt: number;
+			readonly message: string;
 	  }
 	| {
 			readonly type: 'done';
@@ -104,7 +162,52 @@ export type AgentUiEvent =
 	 * stored assistant message.
 	 */
 	| { readonly type: 'reasoning'; readonly turnId: string; readonly text: string }
-	| { readonly type: 'error'; readonly turnId: string; readonly message: string };
+	| {
+			/**
+			 * A message the user should see that is neither the answer nor a
+			 * failure — a policy applied from a sentence, for instance.
+			 *
+			 * Separate from `error`: a notice does not abort or fail the turn,
+			 * and the orchestrator must never treat it as a recoverable error.
+			 */
+			readonly type: 'notice';
+			readonly turnId: string;
+			readonly message: string;
+	  }
+	| {
+			readonly type: 'error';
+			readonly turnId: string;
+			readonly message: string;
+			/**
+			 * Why the turn was aborted, when it was aborted rather than failed.
+			 *
+			 * Mirrors the contract's `ChatStreamEvent`, which is what the renderer
+			 * and the orchestrator actually consume. Without it here, the host
+			 * would receive an error event with the cause stripped off — and the
+			 * orchestrator would go back to inferring "was this a timeout?" from
+			 * the message, which is the bug this field exists to fix.
+			 */
+			readonly abortCause?: AbortCause;
+	  }
+	| {
+		/** The orchestration selected a model for this turn. */
+		readonly type: 'modelSelected';
+		readonly turnId: string;
+		readonly providerId: string;
+		readonly modelId: string;
+		readonly strategy: 'manual' | 'fallback';
+		readonly reason: string;
+		readonly isFallback: boolean;
+	  }
+	| {
+		/** A fallback attempt is starting (after a recoverable error on a previous model). */
+		readonly type: 'fallbackAttempted';
+		readonly turnId: string;
+		readonly attempt: number;
+		readonly providerId: string;
+		readonly modelId: string;
+		readonly previousError: string;
+	  };
 
 /** Where events go. Main wires this to IPC; tests collect into an array. */
 export type AgentEventSink = (event: AgentUiEvent) => void;
@@ -136,6 +239,21 @@ export interface AgentTurnHooks {
 	 * stored after it answers a call no message ever made.
 	 */
 	persistAssistant(content: string, toolCalls?: readonly ToolCallRequest[]): Promise<void>;
+	/** Optional skill discovery service for contextual skill loading. */
+	readonly skillDiscovery?: SkillDiscoveryService;
+	/**
+	 * O modo de turno escolhido no chat (DEV-8.9) e o par efetivo.
+	 *
+	 * Viaja no evento `started` para a interface mostrar o que de fato
+	 * respondeu — no modo automático, o que o motor escolheu.
+	 */
+	readonly routing?: {
+		readonly mode: 'auto' | 'direct' | 'external';
+		readonly providerId?: string;
+		readonly model?: string;
+	};
+	/** The user's message that started this turn, for skill discovery. */
+	readonly userMessage?: string;
 }
 
 /**
@@ -154,14 +272,60 @@ export async function runAgentTurn(
 ): Promise<void> {
 	// The whole stored transcript, which already includes the user's message the
 	// caller persisted just before starting this turn.
-	const messages: ChatMessage[] = record.messages.map((message) => ({
-		role: message.role,
-		content: message.content,
-		...(message.toolCallId !== undefined ? { toolCallId: message.toolCallId } : {}),
-		...(message.toolCalls !== undefined ? { toolCalls: message.toolCalls } : {}),
-	}));
+	const messages: ChatMessage[] = [];
+	for (const message of record.messages) {
+		// A stored tool result cannot be followed directly by a new user
+		// message: strict OpenAI-compatible servers reject `user` coming
+		// right after `tool` because nothing answered the result. Preserve
+		// both halves instead of dropping either by inserting the assistant
+		// continuation that complete turn would have produced.
+		if (
+			messages.length > 0 &&
+			messages[messages.length - 1].role === 'tool' &&
+			message.role === 'user'
+		) {
+			messages.push({ role: 'assistant', content: '' });
+		}
+		messages.push({
+			role: message.role,
+			content: message.content,
+			...(message.toolCallId !== undefined ? { toolCallId: message.toolCallId } : {}),
+			...(message.toolCalls !== undefined ? { toolCalls: message.toolCalls } : {}),
+		});
+	}
 
-	sink({ type: 'started', turnId });
+	// Inject Evelyn Agent identity as the first system message if not already present.
+	// This ensures the agent knows who it is on every turn, regardless of the
+	// conversation's own system prompt (which the user controls).
+	if (!hasSeshyinaIdentity(messages)) {
+		const identityMessage = createSeshyinaAgentSystemMessage();
+		// Insert at the beginning, before any existing system prompt
+		const existingSystemIndex = messages.findIndex((m) => m.role === 'system');
+		if (existingSystemIndex >= 0) {
+			messages.splice(existingSystemIndex, 0, identityMessage);
+		} else {
+			messages.unshift(identityMessage);
+		}
+	}
+
+	// Discover and inject relevant skills
+	const skillInstructions = await discoverSkills(hooks, messages);
+
+	sink({
+		type: 'started',
+		turnId,
+		...(hooks.routing !== undefined ? { routing: hooks.routing } : {}),
+	});
+
+	// Emit skillsLoaded event if any skills were loaded
+	if (skillInstructions.loadedSkillIds.length > 0) {
+		sink({
+			type: 'skillsLoaded',
+			turnId,
+			skillIds: skillInstructions.loadedSkillIds,
+			...(skillInstructions.missing ? { missing: skillInstructions.missing } : {}),
+		});
+	}
 
 	const toolNames = new Map<string, string>();
 	/** Calls seen in the current round, for the stored assistant message. */
@@ -267,7 +431,7 @@ export async function runAgentTurn(
 
 	try {
 		const stream = hooks.runtime.run(
-			{ model: hooks.model, messages },
+			{ model: hooks.model, messages: skillInstructions.messages },
 			options.signal !== undefined ? { signal: options.signal } : {},
 		);
 
@@ -310,6 +474,22 @@ export async function runAgentTurn(
 					continue;
 				}
 
+				case 'ToolRetry': {
+					// A ferramenta vai tentar de novo: a interface mostra
+					// "aguardando/repetindo" em vez de "falhou", e nada é
+					// persistido — só o resultado final vira mensagem.
+					sink({
+						type: 'toolRetry',
+						turnId,
+						callId: event.callId,
+						name: event.toolName,
+						attempt: event.attempt,
+						of: event.of,
+						reason: event.reason,
+					});
+					continue;
+				}
+
 				case 'ToolCompleted': {
 					// The event carries the exact text the model was fed back — a
 					// denial, an unknown tool, malformed arguments, the tool's own
@@ -347,7 +527,15 @@ export async function runAgentTurn(
 					// missing the round the model had actually completed.
 					await closeRound();
 					hooks.release();
-					sink({ type: 'error', turnId, message: event.error.message });
+					{
+						const abortCause = abortCauseOf(event.error);
+						sink({
+							type: 'error',
+							turnId,
+							message: event.error.message,
+							...(abortCause !== undefined ? { abortCause } : {}),
+						});
+					}
 					return;
 
 				case 'TurnCompleted':
@@ -389,6 +577,29 @@ export async function runAgentTurn(
 }
 
 /**
+ * Reads a routing abort cause off an error, if it carries one.
+ *
+ * The engine names five budgets; the host's contract has three. `idle` and
+ * `deadline` are timeouts from the user's side too, so they map onto
+ * `total-time` rather than inventing a fourth value the renderer would ignore.
+ */
+function abortCauseOf(error: Error): AbortCause | undefined {
+	const cause = (error as { readonly abortCause?: unknown }).abortCause;
+	switch (cause) {
+		case 'first-token':
+			return 'first-token';
+		case 'user-stop':
+			return 'user-stop';
+		case 'idle':
+		case 'total-time':
+		case 'deadline':
+			return 'total-time';
+		default:
+			return undefined;
+	}
+}
+
+/**
  * Folds tool calls into the assistant's text.
  *
  * Byte-for-byte the format `runtime.ts` builds internally. The stored transcript
@@ -403,4 +614,118 @@ export function withToolCalls(text: string, calls: readonly ToolCallSummary[]): 
 	return `${text}\n\n[tool calls: ${calls
 		.map((call) => `${call.name}(${call.rawArguments})`)
 		.join(', ')}]`;
+}
+
+/**
+ * Result of skill discovery for a turn.
+ */
+interface SkillDiscoveryResult {
+	/** Messages with skill instructions injected, if any. */
+	readonly messages: ChatMessage[];
+	/** IDs of skills that were loaded. */
+	readonly loadedSkillIds: readonly string[];
+	/** Skills explicitly requested but not found. */
+	readonly missing?: readonly string[];
+}
+
+/**
+ * Discovers relevant skills and injects their instructions into the message history.
+ *
+ * Skills are inserted as a system message before the conversation, using clear
+ * delimiters to prevent instruction injection attacks.
+ */
+async function discoverSkills(
+	hooks: AgentTurnHooks,
+	messages: ChatMessage[],
+): Promise<SkillDiscoveryResult> {
+	// No discovery service available
+	if (hooks.skillDiscovery === undefined) {
+		return { messages, loadedSkillIds: [] };
+	}
+
+	// Find the user's message for this turn (last user message)
+	const userMessage = hooks.userMessage ?? findLastUserMessage(messages);
+	if (userMessage === undefined) {
+		return { messages, loadedSkillIds: [] };
+	}
+
+	// Get available tool names
+	const availableTools = hooks.tools.names();
+
+	try {
+		// Extract explicit skill requests from the user's message
+		const { extractSkillRequests } = await import('../core/skill/skillDiscovery.js');
+		const requestedSkillIds = extractSkillRequests(userMessage);
+
+		// Discover relevant skills
+		const discoveryResult = await hooks.skillDiscovery.discover({
+			query: userMessage,
+			maxSkills: 3,
+			availableTools,
+			requestedSkillIds: requestedSkillIds.length > 0 ? requestedSkillIds : undefined,
+		});
+
+		if (!discoveryResult.ok || discoveryResult.skills.length === 0) {
+			return { messages, loadedSkillIds: [] };
+		}
+
+		// Load instructions
+		const loadedInstructions = await hooks.skillDiscovery.loadInstructions(
+			discoveryResult.skills,
+		);
+
+		if (loadedInstructions.skills.length === 0) {
+			return { messages, loadedSkillIds: [] };
+		}
+
+		// Format as system message
+		const skillMessage = hooks.skillDiscovery.formatAsSystemMessage(loadedInstructions);
+
+		if (skillMessage.length === 0) {
+			return { messages, loadedSkillIds: [] };
+		}
+
+		// Inject as system message at the beginning, after any existing system prompt
+		const skillSystemMessage: ChatMessage = {
+			role: 'system',
+			content: skillMessage,
+		};
+
+		// Find where to insert: after existing system message, or at the beginning
+		const existingSystemIndex = messages.findIndex((m) => m.role === 'system');
+		let injectedMessages: ChatMessage[];
+
+		if (existingSystemIndex >= 0) {
+			// Insert after the existing system message
+			injectedMessages = [
+				...messages.slice(0, existingSystemIndex + 1),
+				skillSystemMessage,
+				...messages.slice(existingSystemIndex + 1),
+			];
+		} else {
+			// No system message, insert at the beginning
+			injectedMessages = [skillSystemMessage, ...messages];
+		}
+
+		return {
+			messages: injectedMessages,
+			loadedSkillIds: loadedInstructions.skills.map((s) => s.id),
+			missing: discoveryResult.missing,
+		};
+	} catch {
+		// Discovery failed, continue without skills
+		return { messages, loadedSkillIds: [] };
+	}
+}
+
+/**
+ * Finds the last user message in the conversation.
+ */
+function findLastUserMessage(messages: ChatMessage[]): string | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		if (messages[i].role === 'user') {
+			return messages[i].content;
+		}
+	}
+	return undefined;
 }

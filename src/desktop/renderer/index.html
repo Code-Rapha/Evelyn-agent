@@ -13,7 +13,7 @@
 			http-equiv="Content-Security-Policy"
 			content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;"
 		/>
-		<title>Seshyina</title>
+		<title>Evelyn</title>
 		<link rel="stylesheet" href="./index.css" />
 	</head>
 	<body>
@@ -23,7 +23,7 @@
 			Two halves. The titlebar is `-webkit-app-region: drag`, so the
 			pointer moves the window from anywhere on it; the buttons inside are
 			`no-drag`, because that region is otherwise swallowed by the drag and
-			the clicks never arrive. The resize handles are ordinary divs — CSS
+			the clicks never arrive. The resize handles are ordinary divs —" CSS
 			has no resize region, which is why the renderer hands every move to
 			main instead.
 
@@ -33,7 +33,8 @@
 		-->
 		<div class="frame">
 			<header class="titlebar">
-				<h1 id="app-name">Seshyina</h1>
+				<h1 id="app-name">Evelyn</h1>
+				<span id="agent-badge" class="agent-badge muted small" hidden>Evelyn Agent</span>
 
 				<div class="window-controls">
 					<button
@@ -64,13 +65,13 @@
 				Everything that is not the conversation moved into the settings
 				drawer: the provider form, the project form, the conversation list
 				and the system prompt were four stacked panels that took a 300px
-				column permanently, and the transcript — the only thing the user
-				opens this window to read — was left with whatever was left over.
+				column permanently, and the transcript —" the only thing the user
+				opens this window to read —" was left with whatever was left over.
 			-->
 				<div class="topbar">
 					<div class="status" aria-live="polite">
 						<span id="status-dot" class="dot"></span>
-						<span id="status-label">Connecting…</span>
+						<span id="status-label">Connecting—</span>
 						<span id="version" class="muted small"></span>
 					</div>
 					<button
@@ -81,6 +82,63 @@
 						title="Settings"
 					></button>
 				</div>
+
+			<!--
+				The router, always visible.
+
+				It answers three questions without being asked: is the router
+				on, which mode is it in, and where does the request go. The
+				rest - the last decision and the monitoring - is one compact
+				line below, because a router panel that hides its own state
+				is just a chat window with extra steps.
+
+				Three levels, in the order they are read: the **state** (the
+				switch and the mode), the **last decision**, and the
+				**monitoring**. The labels are what make it a panel instead
+				of three lines of text: the numbers below are only meaningful
+				once you know which question each line answers.
+			-->
+			<section class="router-console" aria-label="Painel do roteador">
+				<div class="router-bar" aria-live="polite">
+					<span class="router-state">
+						<button
+							id="router-switch"
+							type="button"
+							class="router-switch"
+							aria-pressed="true"
+						>
+							<span class="router-switch-dot"></span>
+							<span id="router-switch-label">Roteador</span>
+						</button>
+					</span>
+					<span id="router-mode" class="router-chip" data-mode="native">Nativo</span>
+					<span id="router-destination" class="router-destination muted small">destino: &mdash;</span>
+					<button id="router-configure" type="button" class="subtle small router-configure">
+						Configurar
+					</button>
+					<button
+						id="router-open-panel"
+						type="button"
+						class="subtle small router-configure"
+						title="Abre o painel do serviço local no navegador (precisa do serviço ativo)"
+					>
+						Abrir no navegador
+					</button>
+				</div>
+
+				<div class="router-facts">
+					<div class="router-fact">
+						<span class="router-fact-label">Última decisão</span>
+						<p id="router-last" class="router-fact-value muted small">
+							Nenhuma requisição registrada ainda.
+						</p>
+					</div>
+					<div class="router-fact">
+						<span class="router-fact-label">Monitoramento</span>
+						<p id="router-monitor" class="router-fact-value muted small"></p>
+					</div>
+				</div>
+			</section>
 
 				<p id="core-error" class="error core-error" hidden></p>
 
@@ -98,7 +156,7 @@
 					will be. Not a panel: this is a transient state rather than
 					content, so it appears with the reasoning and is gone the
 					moment the answer starts arriving. The reasoning itself is
-					not shown — nothing about it needs to outlive the pause it
+					not shown —" nothing about it needs to outlive the pause it
 					explains.
 
 					Its own `aria-live`, because the messages list has a
@@ -108,7 +166,7 @@
 				-->
 				<div id="thinking" class="thinking" hidden aria-live="polite">
 					<span class="thinking-dots" aria-hidden="true"></span>
-					<span class="thinking-label">thinking…</span>
+					<span class="thinking-label">thinking—</span>
 				</div>
 
 				<!--
@@ -181,14 +239,33 @@
 						<textarea
 							id="input"
 							rows="1"
-							placeholder="Say something…  (Enter to send, Shift+Enter for a new line)"
+							placeholder="Say something—  (Enter to send, Shift+Enter for a new line)"
 							aria-label="Message"
 							disabled
 						></textarea>
 
 						<div class="composer-actions">
+							<!--
+								DEV-9.1 (item 3): "tarefa" é o turno de várias etapas.
+
+								Ligado, o motor recebe um teto de rounds maior e o
+								tempo passa a ser medido por **inatividade** em vez
+								de relógio — um comando de cinco minutos é progresso,
+								não travamento. Desligado, o turno é uma pergunta,
+								com os limites de sempre.
+							-->
+							<button
+								id="task-toggle"
+								type="button"
+								class="secondary subtle small"
+								aria-pressed="false"
+								title="Tratar esta mensagem como uma tarefa de várias etapas: teto maior de etapas e tempo medido por progresso"
+							>
+								Tarefa
+							</button>
 							<button id="send" type="button" class="send" disabled>Send</button>
 							<button id="stop" type="button" class="secondary" hidden>Stop</button>
+							<button id="retry" type="button" class="secondary" hidden>Tentar novamente</button>
 						</div>
 					</div>
 				</div>
@@ -200,7 +277,7 @@
 
 				`data-dir` carries the direction to main, so one handler serves all
 				eight. They are siblings of `.app` rather than children for the
-				reason given on `.frame` — the clip on `.app` would eat the east and
+				reason given on `.frame` —" the clip on `.app` would eat the east and
 				south handles.
 
 				Each is `aria-hidden` and not focusable: a keyboard user resizes with
@@ -228,7 +305,7 @@
 				</button>
 			</header>
 
-			<nav class="settings-nav" aria-label="Settings sections">
+			<nav class="settings-nav only-settings" aria-label="Settings sections">
 					<button
 						type="button"
 						class="settings-nav-item"
@@ -245,26 +322,146 @@
 					>
 						Project
 					</button>
+					<!--
+					Models: what the user knows about each model.
+
+					Its own section because it is per-model rather than
+					per-provider, and putting it in the Providers panel would have
+					said a price belongs to the connection rather than to the model
+					behind it.
+				-->
+					<button
+						type="button"
+						class="settings-nav-item"
+						data-section="models"
+						aria-pressed="false"
+					>
+						Models
+					</button>
+					<!--
+						Budget: what the ledger spent and the caps that bound it.
+
+						Separate from Models because a price is a fact about one
+						model and a budget is a decision about all of them; it is
+						the only section whose numbers change a turn's outcome.
+					-->
+					<button
+						type="button"
+						class="settings-nav-item"
+						data-section="budget"
+						aria-pressed="false"
+					>
+						Orçamento
+					</button>
+				<!--
+					Router: where the request goes, and whether it goes at all.
+
+					Its own section because it decides the destination, which is
+					a different kind of decision from the price of a model or the
+					ceiling on what it costs.
+				-->
+				<button
+					type="button"
+					class="settings-nav-item"
+					data-section="router"
+					aria-pressed="false"
+				>
+					Roteador
+				</button>
+					<!--
+						Skills: proposals to improve what the agent knows how to do.
+
+						Its own section because it is the one place in this window
+						where a click can change a live skill, and it should not be
+						reached by muscle memory from a price form.
+					-->
+					<button
+						type="button"
+						class="settings-nav-item"
+						data-section="skills"
+						aria-pressed="false"
+					>
+						Skills
+					</button>
+					<!--
+						Modo DEV: a área que deixa a Evelyn alterar o próprio código.
+						Fica por último e é a única que pode mudar o aplicativo em si,
+						longe das formas do dia a dia.
+					-->
+					<button
+						type="button"
+						class="settings-nav-item"
+						data-section="dev"
+						aria-pressed="false"
+					>
+						Modo DEV
+					</button>
 				</nav>
 
 				<div class="drawer-body">
 				<!-- Column A. The two panels that are tall when open, so the
 				     height they take balances against the collapsed forms. -->
 				<div class="drawer-col drawer-col-a">
-					<section class="panel only-chat">
+					<section class="panel only-chat drawer-panel">
 					<details id="model-panel" open>
 						<summary>
-							<span class="summary-title">Model</span>
+							<span class="summary-title">Modelo</span>
 							<span id="model-current" class="muted small"></span>
 						</summary>
 
 						<div class="panel-body">
+							<!--
+								Caminho C: "agente" ou "você". No modo automático quem
+								decide é o motor —" a Evelyn —", a partir das preferências
+								que ela própria escreveu no diálogo fixo. Escolher o
+								modelo ali seria decidir o que a tela acabou de entregar
+								a ela, então o seletor manual só existe no modo em que
+								o usuário escolhe de fato.
+							-->
 							<label class="block">
-								<span class="visually-hidden">Available models</span>
-								<select id="model-select" aria-label="Available models">
-									<option value="">no models loaded</option>
+								<span class="small">Modo</span>
+								<select id="turn-mode-select" aria-label="Modo de execução do chat">
+									<option value="auto">Agente (a Evelyn escolhe o modelo)</option>
+									<option value="direct">Você escolhe o modelo</option>
+									<option value="external">Roteador externo</option>
 								</select>
 							</label>
+							<p id="turn-mode-note" class="muted small" hidden></p>
+							<button id="turn-mode-configure" type="button" class="secondary subtle small" hidden>
+								Abrir configurações do roteador
+							</button>
+
+							<div id="model-manual" class="block" hidden>
+								<label class="block" style="margin-top: 8px;">
+									<span class="visually-hidden">Available models</span>
+									<select id="model-select" aria-label="Available models">
+										<option value="">no models loaded</option>
+									</select>
+								</label>
+
+								<label class="block" style="margin-top: 8px;">
+									<span class="visually-hidden">Orchestration strategy</span>
+									<select id="strategy-select" aria-label="Orchestration strategy">
+										<option value="manual">Manual (modelo fixo)</option>
+										<option value="fallback">Fallback (tenta alternativas em erro recuperável)</option>
+									</select>
+								</label>
+							</div>
+
+							<!--
+								No modo agente, o lugar da escolha é a preferência, não o
+								seletor. Este atalho leva ao diálogo fixo onde a Evelyn
+								escreveu o que sabe de cada modelo.
+							-->
+							<div id="model-agent" class="block" hidden>
+								<p class="muted small" id="model-agent-note">
+									A Evelyn escolhe o modelo em cada turno, a partir das
+									preferências que ela mesma escreveu.
+								</p>
+								<button id="model-agent-open" type="button" class="secondary subtle small">
+									Abrir o diálogo de preferências
+								</button>
+							</div>
 
 							<div class="row">
 								<button id="model-refresh" type="button" class="secondary subtle">
@@ -275,6 +472,7 @@
 							<p id="model-error" class="error" hidden></p>
 						</div>
 					</details>
+
 				</section>
 
 					<!--
@@ -285,7 +483,7 @@
 					the system prompt panel below, which is per conversation and
 					now has no list beside it to say which one it applies to.
 				-->
-				<section class="panel growable only-chat">
+				<section class="panel only-chat drawer-panel">
 					<details id="conversation-panel" open>
 						<summary>
 							<span class="summary-title">Conversations</span>
@@ -337,8 +535,8 @@
 					beside it saying which conversation it applied to, which
 					made it a field that could edit the wrong one silently.
 				-->
-				<section class="panel growable only-chat">
-					<details id="system-panel" class="system" open>
+				<section class="panel growable only-chat drawer-panel">
+					<details id="system-panel" class="system">
 						<summary>
 							<span class="summary-title">System prompt</span>
 							<span class="muted small">this conversation</span>
@@ -352,6 +550,7 @@
 								aria-label="System prompt"
 								disabled
 							></textarea>
+							<p id="system-prompt-note" class="muted small" hidden></p>
 							<div class="row end">
 								<button id="system-clear" type="button" class="secondary subtle" disabled>
 									Clear
@@ -365,8 +564,8 @@
 				</div>
 
 				<!-- Column B. One summary line each until opened. -->
-				<div class="drawer-col drawer-col-b">
-					<section class="panel only-settings" data-section="providers">
+				<div class="drawer-col drawer-col-b only-settings">
+					<section class="panel only-settings drawer-panel" data-section="providers">
 					<details id="provider-panel" open>
 						<summary>
 							<span class="summary-title">Provider</span>
@@ -430,11 +629,30 @@
 							</button>
 
 							<p id="provider-error" class="error" hidden></p>
-						</div>
-					</details>
-				</section>
 
-					<section class="panel only-settings" data-section="project">
+					</div>
+				</details>
+
+				<!--
+					The connections, one card each: what the endpoint is, what it
+					publishes, what is known about its models, and what was measured.
+					The form above edits one connection; this is the list of all
+					of them, with the facts the Core actually has.
+
+					A card of its own, and not inside the form: the form folds away
+					when a provider is selected, and the list of connections is not
+					a part of the form.
+				-->
+				<details id="provider-connections-panel" open>
+					<summary>
+						<span class="summary-title">Conexões</span>
+						<span id="provider-connections-current" class="muted small"></span>
+					</summary>
+					<div id="provider-connections" class="connection-list"></div>
+				</details>
+			</section>
+
+					<section class="panel only-settings drawer-panel" data-section="project">
 					<details id="project-panel">
 						<summary>
 							<span class="summary-title">Project</span>
@@ -469,15 +687,845 @@
 						</div>
 					</details>
 				</section>
-				</div>
-			</div>
+				<!--
+					The model catalog.
 
-			<footer class="drawer-foot">
-				<span id="data-directory" class="muted small"></span>
-			</footer>
-		</aside>
+					A record of what the user knows about a model and what real runs
+					measured, kept apart from the Providers panel on purpose: a price
+					belongs to the model behind a provider, not to the connection, and
+					forgetting a record here must not un-configure anything.
 
-			<div class="resize-handle resize-n" data-dir="n" aria-hidden="true"></div>
+					Every field is optional and blank means unknown. Nothing is
+					pre-filled from a model id, and nothing is guessed from one.
+				-->
+				<section class="panel only-settings drawer-panel" data-section="models">
+				<details id="catalog-panel">
+					<summary>
+						<span class="summary-title">Models</span>
+						<span id="catalog-current" class="muted small"></span>
+					</summary>
+
+					<div class="panel-body">
+						<label class="block">
+							<span class="visually-hidden">Model to describe</span>
+							<select id="catalog-select" aria-label="Model to describe"></select>
+						</label>
+
+						<form id="catalog-form" class="stack">
+							<!--
+								Provider and model, typed rather than picked.
+
+								The obvious alternative is to reuse the chat's model
+								list, and it was rejected: that list is built by
+								asking every provider for its models, and this
+								window deliberately does not load it —" one HTTP
+								round trip per provider every time settings is
+								opened, for a list the settings window would only
+								read. Typing also works for a provider that is down,
+								which is exactly when the price page is worth having.
+							-->
+							<div class="row">
+								<label>
+									Provider
+									<input
+										id="catalog-provider"
+										type="text"
+										placeholder="provider id"
+										autocomplete="off"
+										spellcheck="false"
+									/>
+								</label>
+								<label>
+									Model
+									<input
+										id="catalog-model"
+										type="text"
+										placeholder="model id"
+										autocomplete="off"
+										spellcheck="false"
+									/>
+								</label>
+							</div>
+
+							<label>
+								Capabilities <span class="muted">(comma separated)</span>
+								<input
+									id="catalog-capabilities"
+									type="text"
+									placeholder="code, long documents, translation"
+									autocomplete="off"
+								/>
+							</label>
+
+							<fieldset class="stack">
+								<legend>Price</legend>
+								<div class="row">
+									<label>
+										Currency
+										<input
+											id="catalog-currency"
+											type="text"
+											placeholder="USD"
+											autocomplete="off"
+											spellcheck="false"
+										/>
+									</label>
+									<label>
+										Per
+										<select id="catalog-unit" aria-label="Price unit">
+											<option value="per_1k_tokens">1k tokens</option>
+											<option value="per_1m_tokens">1M tokens</option>
+										</select>
+									</label>
+								</div>
+								<div class="row">
+									<label>
+										Input
+										<input
+											id="catalog-price-input"
+											type="text"
+											inputmode="decimal"
+											placeholder="unknown"
+											autocomplete="off"
+										/>
+									</label>
+									<label>
+										Output
+										<input
+											id="catalog-price-output"
+											type="text"
+											inputmode="decimal"
+											placeholder="unknown"
+											autocomplete="off"
+										/>
+									</label>
+								</div>
+								<p class="muted small">
+									Blank means unknown. A real zero is a free price and is kept.
+								</p>
+							</fieldset>
+
+							<label>
+								Access
+								<select id="catalog-access" aria-label="Access">
+									<option value="unknown">unknown</option>
+									<option value="free">free</option>
+									<option value="paid">paid</option>
+								</select>
+							</label>
+
+							<!--
+								A matriz de capacidades, com três estados por
+								campo: sim, não e "não sei". O "não sei" é o
+								estado padrão de propósito - um modelo que
+								ninguém descreveu não é "sem ferramentas", e
+								tratar isso como desconhecido é o que decide
+								se o seletor o exclui ou só não o prefere.
+							-->
+							<fieldset class="stack">
+								<legend>Capabilities</legend>
+								<label>
+									<input id="catalog-tool-calling" type="checkbox" />
+									Uses tools
+								</label>
+								<label>
+									<input id="catalog-structured-output" type="checkbox" />
+									Structured output
+								</label>
+								<label>
+									<input id="catalog-reasoning" type="checkbox" />
+									Reasoning
+								</label>
+								<p class="muted small">
+									Unticked means unknown, not "no". A conflict with what the
+									provider publishes is shown side by side, and you choose which
+									one counts.
+								</p>
+							</fieldset>
+
+							<fieldset class="stack">
+								<legend>Limits</legend>
+								<div class="row">
+									<label>
+										Context tokens
+										<input
+											id="catalog-context"
+											type="text"
+											inputmode="numeric"
+											placeholder="unknown"
+											autocomplete="off"
+										/>
+									</label>
+									<label>
+										Max output
+										<input
+											id="catalog-max-output"
+											type="text"
+											inputmode="numeric"
+											placeholder="unknown"
+											autocomplete="off"
+										/>
+									</label>
+								</div>
+							</fieldset>
+
+							<label>
+								Notes
+								<textarea
+									id="catalog-notes"
+									rows="2"
+									placeholder="anything you want to remember"
+								></textarea>
+							</label>
+
+							<div class="row">
+								<button id="catalog-save" type="submit">Save</button>
+								<button id="catalog-clear" type="button" class="danger subtle">
+									Forget this model
+								</button>
+							</div>
+						</form>
+
+						<!--
+							What real runs measured, below the form rather than
+							inside it. Not editable on purpose: these are
+							observations, and a field that looks typeable gets typed
+							into and then believed.
+						-->
+						<p id="catalog-observed" class="muted small"></p>
+
+						<p id="catalog-error" class="error" hidden></p>
+					</div>
+				</details>
+			</section>
+
+			<section class="panel only-settings drawer-panel" data-section="router">
+				<details id="router-panel" open>
+					<summary>
+						<span class="summary-title">Roteador</span>
+						<span id="router-current" class="muted small"></span>
+					</summary>
+
+					<div class="panel-body stack">
+						<p class="muted small">
+							Onde a requisicao vai, e se ela vai. O modo escolhe o
+							destino; as politicas de acesso, orcamento e cotas continuam
+							valendo em todos os modos.
+					</p>
+
+						<label>
+						<!--
+							The mode, as three cards.
+
+							A drop-down with three long options is a poor way to
+							choose between *who decides*: the whole difference
+							between the three is in the sentence, and the
+							sentence is what the menu hides. The cards show the
+							whole sentence, and only the one in use leads to a
+							destination.
+						-->
+						<fieldset class="router-modes">
+							<legend class="field-legend">Modo do roteador</legend>
+
+						<div class="mode-cards">
+								<label class="mode-card">
+									<input type="radio" name="router-mode" value="native" />
+									<span class="mode-card-head">
+										<span class="mode-card-title">Nativo</span>
+										<span class="mode-card-tag">a Evelyn decide</span>
+									</span>
+									<span class="mode-card-text">
+										A Evelyn escolhe o modelo entre os provedores disponíveis e
+										pode aplicar o fallback quando um modelo falha.
+									</span>
+								</label>
+	
+								<label class="mode-card">
+									<input type="radio" name="router-mode" value="external" />
+									<span class="mode-card-head">
+										<span class="mode-card-title">Externo</span>
+										<span class="mode-card-tag">um roteador decide</span>
+									</span>
+									<span class="mode-card-text">
+										A requisição vai para um roteador externo, que escolhe o modelo
+										internamente. A Evelyn mede, registra e reporta —" mas não
+										decide, e não vê as decisões internas.
+									</span>
+								</label>
+	
+								<label class="mode-card">
+									<input type="radio" name="router-mode" value="direct" />
+									<span class="mode-card-head">
+										<span class="mode-card-title">Direto</span>
+										<span class="mode-card-tag">um provedor atende</span>
+									</span>
+									<span class="mode-card-text">
+										A requisição vai direto ao provedor escolhido, sem a seleção de
+										modelos da Evelyn. O modelo pedido é o modelo atendido.
+									</span>
+								</label>
+						</div>
+						</fieldset>
+
+						<!--
+							The destinations. Only the one the mode points at is
+							shown: the other is not an option the user can take
+							right now, and showing it greyed out would be asking a
+							question with only one answer.
+						-->
+						<div class="router-destinations" id="router-destinations" data-mode="native">
+							<div class="router-destination" data-mode="external">
+								<label class="field-legend" for="router-external-select">
+									Roteador externo
+								</label>
+								<select id="router-external-select" aria-label="Provedor do roteador externo">
+									<option value="">escolha um endpoint</option>
+								</select>
+								<p class="muted small field-hint">
+									O endpoint que decide o modelo internamente.
+								</p>
+							</div>
+
+							<div class="router-destination" data-mode="direct">
+								<label class="field-legend" for="router-direct-select">
+									Provedor direto
+								</label>
+								<select id="router-direct-select" aria-label="Provedor direto">
+									<option value="">escolha um endpoint</option>
+								</select>
+								<p class="muted small field-hint">
+									O endpoint que atende a requisição, sem a seleção de modelos.
+								</p>
+							</div>
+						</div>
+
+						<label class="router-toggle">
+							<input id="router-enabled" type="checkbox" />
+							<span class="router-toggle-text">
+								<span class="router-toggle-title">Roteador ligado</span>
+								<span class="muted small">
+									Desligado, nenhuma requisição começa —" e a recusa diz por quê.
+								</span>
+							</span>
+						</label>
+
+						<!--
+							O serviço local: o processo que é dono dos dados no modo
+							conectado e que atende o painel no navegador. Ele sobe
+							sozinho ao abrir o app; este controle é para desligar e
+							ligar de novo sem fechar nada.
+						-->
+						<div class="service-control" id="service-control">
+							<div class="service-control-head">
+								<span class="service-control-title">Serviço local</span>
+								<span id="service-state" class="service-state" data-state="inactive">desligado</span>
+							</div>
+							<p id="service-detail" class="muted small"></p>
+							<div class="row">
+								<button id="service-start" type="button">Ativar serviço</button>
+								<button id="service-stop" type="button" class="secondary subtle">Desligar serviço</button>
+							</div>
+							<p class="muted small">
+								O serviço continua no ar quando a janela fecha, e é ele que atende o painel no
+								navegador. Desligá-lo devolve o app ao modo local na próxima abertura.
+							</p>
+						</div>
+
+						<div class="row">
+							<button id="router-save" type="button">Salvar</button>
+							<button id="router-reload" type="button" class="secondary subtle">Recarregar</button>
+						</div>
+
+						<p id="router-note" class="muted small"></p>
+						<p id="router-error" class="error" role="alert" hidden></p>
+					</div>
+				</details>
+			</section>
+			<section class="panel only-settings drawer-panel" data-section="budget">
+				<details id="budget-panel" open>
+					<summary>
+						<span class="summary-title">Orçamento</span>
+						<span id="budget-current" class="muted small"></span>
+					</summary>
+
+					<div class="panel-body">
+						<!--
+							What the ledger spent in the window, aggregated. Read
+							rather than stored: the numbers are recomputed from
+							the attempts on every read, so this panel cannot drift
+							from the ledger it describes.
+						-->
+						<label>
+							Período
+							<select id="budget-window" aria-label="Budget window">
+								<option value="month">Mês corrente</option>
+								<option value="day">Hoje</option>
+							</select>
+						</label>
+
+						<p id="budget-total" class="muted small"></p>
+						<p id="budget-slices" class="muted small"></p>
+
+						<!--
+							Avisos de 80%. Condições ativas do período, não
+							mensagens acumuladas: a lista é recalculada a cada
+							leitura e some quando o limite muda ou o período vira.
+						-->
+						<ul id="budget-alerts" class="budget-alerts" hidden></ul>
+
+						<!--
+							Consumo por conversa e por turno. Registrado à
+							esquerda, previsto à direita, com rótulos
+							diferentes: são coisas diferentes e não devem
+							ser somadas na leitura.
+						-->
+						<details id="budget-conversations-panel" open>
+							<summary class="small">Por conversa e por turno</summary>
+							<div id="budget-conversations" class="budget-conversations"></div>
+						</details>
+
+						<!--
+							A política de acesso e a fusão de preços. Fica dentro
+							do Orçamento porque é a mesma decisão vista de outro
+							lado: o que pode ser chamado e a que preço o limite
+							é medido. Nenhuma tela nova.
+						-->
+						<details id="access-policy-panel" open>
+							<summary class="small">Modelos usados e origem do preço</summary>
+							<div class="stack">
+								<label>
+									Política de acesso
+									<select id="access-policy-mode" aria-label="Política de acesso a modelos">
+										<option value="any">Qualquer modelo permitido</option>
+										<option value="free_only">Somente modelos gratuitos confirmados</option>
+										<option value="free_preferred">Preferir gratuitos, permitir os demais</option>
+									</select>
+								</label>
+								<label>
+									Preço usado no orçamento
+									<select id="access-policy-price" aria-label="Origem do preço">
+										<option value="user">O meu preço (catálogo)</option>
+										<option value="discovered">O preço publicado pelo provedor</option>
+									</select>
+								</label>
+								<label>
+									Limites usados na seleção
+									<select id="access-policy-limits" aria-label="Origem dos limites">
+										<option value="user">Os meus limites (catálogo)</option>
+										<option value="discovered">Os limites publicados pelo provedor</option>
+									</select>
+								</label>
+								<label>
+									Capacidades usadas na seleção
+									<select id="access-policy-capabilities" aria-label="Origem das capacidades">
+										<option value="user">As minhas capacidades (catálogo)</option>
+										<option value="discovered">As capacidades publicadas pelo provedor</option>
+									</select>
+								</label>
+								<p id="access-policy-status" class="muted small"></p>
+								<p class="muted small">
+									A frase <em>Evelyn, use somente os modelos gratuitos</em> liga
+									a política no chat. Gratuito exige classificação de acesso
+									confirmada; preço zero sozinho não basta.
+								</p>
+								<div id="merged-catalog" class="budget-conversations"></div>
+								<details id="decision-reports-panel">
+									<summary class="small">Últimas decisões de roteamento</summary>
+									<div id="decision-reports" class="budget-conversations"></div>
+									<div id="decision-report-detail" class="budget-conversations"></div>
+									<div id="decision-comparison" class="budget-conversations"></div>
+									<p id="decision-report-error" class="error" hidden></p>
+								</details>
+								<p id="access-policy-error" class="error" hidden></p>
+							</div>
+						</details>
+
+						<!--
+							The limit form. Scope is optional on purpose: an empty
+							provider makes the limit global, and an empty model
+							makes it cover the whole provider. The same scope
+							saved twice replaces the cap instead of stacking a
+							second one.
+						-->
+						<form id="budget-form" class="stack">
+							<fieldset class="stack">
+								<legend>Novo limite</legend>
+								<div class="row">
+									<label>
+										Provedor <span class="muted">(vazio = geral)</span>
+										<input
+											id="budget-provider"
+											type="text"
+											placeholder="provider id"
+											autocomplete="off"
+											spellcheck="false"
+										/>
+									</label>
+									<label>
+										Modelo <span class="muted">(opcional)</span>
+										<input
+											id="budget-model"
+											type="text"
+											placeholder="model id"
+											autocomplete="off"
+											spellcheck="false"
+										/>
+									</label>
+								</div>
+								<div class="row">
+									<label>
+										Moeda
+										<input
+											id="budget-currency"
+											type="text"
+											placeholder="USD"
+											autocomplete="off"
+											spellcheck="false"
+										/>
+									</label>
+									<label>
+										Limite
+										<input
+											id="budget-amount"
+											type="text"
+											inputmode="decimal"
+											placeholder="5.00"
+											autocomplete="off"
+										/>
+									</label>
+									<label>
+										Janela
+										<select id="budget-limit-window" aria-label="Limit window">
+											<option value="month">Mensal</option>
+											<option value="day">Diária</option>
+										</select>
+									</label>
+								</div>
+							</fieldset>
+
+							<div class="row">
+								<button id="budget-save" type="submit">Salvar limite</button>
+							</div>
+						</form>
+
+						<ul id="budget-limits" class="muted small"></ul>
+
+						<p id="budget-error" class="error" hidden></p>
+					</div>
+				</details>
+			</section>
+
+			<!--
+				Skill evolution: the review queue.
+
+				The one panel here whose buttons change what the agent knows
+				rather than how the window is set up, so it is built around
+				reading before deciding: each proposal states what was observed,
+				how much evidence stands behind it, and what was never tested,
+				and the current content sits beside the proposed one rather than
+				behind a "view diff" click.
+
+				Approval and activation are separate buttons because they are
+				separate decisions. "Approve" means *I agree with this change*;
+				only "Activate" writes it to the live skill, and the button stays
+				disabled until the first one has been made.
+			-->
+			<section class="panel only-settings drawer-panel" data-section="skills">
+				<details id="skills-panel" open>
+					<summary>
+						<span class="summary-title">Melhorias de skills</span>
+						<span id="skills-count" class="muted small"></span>
+					</summary>
+
+					<div class="panel-body">
+						<p class="muted small">
+							Propostas de melhoria geradas a partir de execuções
+							anteriores. Nenhuma skill é alterada antes de você aprovar
+							e ativar.
+						</p>
+
+						<div class="row">
+							<label>
+								<span class="visually-hidden">Filtrar por situação</span>
+								<select id="skills-filter" aria-label="Filtrar propostas por situação">
+									<option value="pending">Aguardando decisão</option>
+									<option value="approved">Aprovadas</option>
+									<option value="activated">Ativas</option>
+									<option value="rejected">Rejeitadas</option>
+									<option value="reverted">Revertidas</option>
+									<option value="">Todas</option>
+								</select>
+							</label>
+							<button id="skills-scan" type="button">Analisar histórico</button>
+							<button id="skills-refresh" type="button">Atualizar</button>
+						</div>
+
+						<!--
+							The analysis result, above the queue.
+
+							It sits there because the reading and the decisions are two
+							separate acts: the user is meant to see what the scan found —"
+							and what it could *not* conclude —" before deciding whether any of
+							it deserves a proposal.
+						-->
+						<div id="skills-scan-result" class="stack" hidden></div>
+
+						<div id="skills-list" class="stack"></div>
+						<p id="skills-empty" class="muted small" hidden>
+							Nenhuma proposta com essa situação.
+						</p>
+						<p id="skills-error" class="error" hidden></p>
+					</div>
+				</details>
+			</section>
+			<!--
+				Modo DEV (DEV-6).
+
+				O painel do modo que deixa a Evelyn alterar o próprio código. Fica
+				na janela de configurações, não no chat: é uma área de operação, e
+				o chat continua sendo o lugar da conversa.
+
+				Esta janela **só mostra**: o host está no processo da janela
+				principal, e ativar/encerrar/aplicar/restaurar é pedido por lá. O
+				`main` recusa as ações vindas daqui —" não é a página que decide.
+				Tudo o que aparece vem de `getDevState`; nada é inventado.
+			-->
+			<section class="panel only-settings drawer-panel" data-section="dev">
+				<details id="dev-panel" open>
+					<summary>
+						<span class="summary-title">Modo DEV</span>
+						<span id="dev-session-badge" class="muted small">carregando—</span>
+					</summary>
+
+					<div class="panel-body">
+						<!--
+							O modo DEV só existe quando o Core é deste processo. No
+							modo conectado o Core é do serviço, e o painel explicava
+							isso sem oferecer saída. Este bloco oferece.
+						-->
+						<div id="dev-local-only" class="service-control" hidden>
+							<div class="service-control-head">
+								<span class="service-control-title">Indisponível em modo conectado</span>
+							</div>
+							<p class="muted small">
+								O modo DEV edita o código, e para isso o Core precisa ser desta janela. Agora ele
+								é do serviço local. A troca encerra o serviço com segurança e reabre a Evelyn em
+								modo local —" seus dados e conversas continuam iguais.
+							</p>
+							<div class="row">
+								<button id="dev-restart-local" type="button">Reabrir em modo local para usar o DEV</button>
+							</div>
+							<p id="dev-restart-error" class="error" hidden></p>
+						</div>
+						<p class="muted small">
+							O modo DEV deixa a Evelyn ler, alterar e verificar o próprio
+							repositório. A autorização vale só para esta execução do
+							aplicativo: ao encerrar ou reiniciar, ela não voltar.
+						</p>
+
+						<div id="dev-unavailable" class="stack" hidden>
+							<p class="muted small" id="dev-unavailable-reason"></p>
+						</div>
+
+						<div id="dev-session" class="router-facts" hidden>
+							<div class="router-fact">
+								<span class="router-fact-label">Estado</span>
+								<p id="dev-session-state" class="router-fact-value muted small"></p>
+							</div>
+							<div class="router-fact">
+								<span class="router-fact-label">Repositório</span>
+								<p id="dev-root" class="router-fact-value muted small"></p>
+							</div>
+							<div class="router-fact">
+								<span class="router-fact-label">Autorização</span>
+								<p id="dev-authorization" class="router-fact-value muted small"></p>
+							</div>
+							<div class="router-fact">
+								<span class="router-fact-label">Início</span>
+								<p id="dev-started" class="router-fact-value muted small"></p>
+							</div>
+							<div class="router-fact">
+								<span class="router-fact-label">Credencial local</span>
+								<p id="dev-credential" class="router-fact-value muted small"></p>
+							</div>
+						</div>
+
+						<div class="row">
+							<button id="dev-activate" type="button" hidden>Ativar modo DEV</button>
+							<button id="dev-deactivate" type="button" hidden>Encerrar modo DEV</button>
+							<button id="dev-configure" type="button" hidden>Configurar autorização</button>
+							<button id="dev-recover" type="button" hidden>Recuperar credencial</button>
+							<button id="dev-refresh" type="button">Atualizar</button>
+						</div>
+
+						<!--
+							Desbloqueio persistente: só aparece quando o host o
+							oferece (esta instalação foi iniciada com ele ligado).
+							Bloquear mantém o lembrete; revogar apaga e invalida.
+						-->
+						<div id="dev-persistent" class="service-control" hidden>
+							<div class="service-control-head">
+								<span class="service-control-title">Desbloqueio neste dispositivo</span>
+								<span id="dev-persistent-state" class="service-state" data-state="inactive"></span>
+							</div>
+							<p id="dev-persistent-detail" class="muted small"></p>
+							<div class="row">
+								<button id="dev-lock" type="button" class="secondary subtle">Bloquear</button>
+								<button id="dev-revoke-unlock" type="button" class="danger subtle">Revogar</button>
+							</div>
+							<p class="muted small">
+								Bloquear encerra o DEV agora e mantém a lembrança: o próximo desbloqueio não
+								pede a senha. Revogar apaga a lembrança e invalida qualquer cópia dela —" a
+								senha volta a ser pedida. A senha não é guardada: fica apenas um recibo
+								cifrado pelo Windows, válido só nesta conta e máquina.
+							</p>
+						</div>
+						<p id="dev-credential-note" class="muted small" hidden></p>
+						<p id="dev-activation-note" class="muted small" hidden></p>
+						<p id="dev-message" class="muted small" hidden></p>
+						<p id="dev-error" class="error" hidden></p>
+
+						<!--
+							DEV-7: a pergunta de autorização que o host abriu.
+
+							O host manda o texto e o id; esta página só desenha. A
+							senha vai direto para o campo e sai por
+							`answerDevOwnerPrompt` —" não fica em estado, não aparece
+							em log e não volta.
+						-->
+						<div id="dev-owner-prompt" class="stack" hidden>
+							<strong class="small" id="dev-owner-title"></strong>
+							<p id="dev-owner-detail" class="muted small"></p>
+							<!--
+								DEV-9.1: a pergunta de execução de comando.
+
+								Não pede senha: o que a pessoa precisa julgar é o
+								comando, o diretório e o escopo, e isso está no
+								texto acima. O bloco separa a leitura da decisão —
+								cada linha é um fato, e nada aqui é editável.
+							-->
+							<dl id="dev-command-facts" class="router-facts" hidden>
+								<div class="router-fact">
+									<span class="router-fact-label">Comando</span>
+									<code id="dev-command-text" class="router-fact-value small"></code>
+								</div>
+								<div class="router-fact">
+									<span class="router-fact-label">Diretório</span>
+									<code id="dev-command-cwd" class="router-fact-value small"></code>
+								</div>
+								<div class="router-fact">
+									<span class="router-fact-label">Escopo</span>
+									<span id="dev-command-scope" class="router-fact-value small"></span>
+								</div>
+							</dl>
+							<label id="dev-owner-password-wrap">
+								<span class="visually-hidden">Senha local do proprietário</span>
+								<input
+									id="dev-owner-password"
+									type="password"
+									autocomplete="off"
+									spellcheck="false"
+									placeholder="Senha local do proprietário"
+								/>
+							</label>
+							<label id="dev-owner-remember-wrap" class="row" hidden>
+								<input id="dev-owner-remember" type="checkbox" />
+								<span class="small">Lembrar neste dispositivo (o próximo desbloqueio não pede a senha)</span>
+							</label>
+							<label id="dev-owner-confirmation-wrap" hidden>
+								<span class="visually-hidden">Repetir a senha</span>
+								<input
+									id="dev-owner-confirmation"
+									type="password"
+									autocomplete="off"
+									spellcheck="false"
+									placeholder="Repetir a senha"
+								/>
+							</label>
+							<div class="row">
+								<button id="dev-owner-submit" type="button">Autorizar</button>
+								<button id="dev-owner-cancel" type="button">Cancelar</button>
+							</div>
+						</div>
+
+						<strong class="small">Operação</strong>
+						<div id="dev-operation" class="stack" hidden>
+							<div class="router-facts">
+								<div class="router-fact">
+									<span class="router-fact-label">Identificador</span>
+									<p id="dev-op-id" class="router-fact-value muted small"></p>
+								</div>
+								<div class="router-fact">
+									<span class="router-fact-label">Estado</span>
+									<p id="dev-op-stage" class="router-fact-value muted small"></p>
+								</div>
+								<div class="router-fact">
+									<span class="router-fact-label">Estratégia</span>
+									<p id="dev-op-strategy" class="router-fact-value muted small"></p>
+								</div>
+								<div class="router-fact">
+									<span class="router-fact-label">Atualizada</span>
+									<p id="dev-op-updated" class="router-fact-value muted small"></p>
+								</div>
+							</div>
+							<div>
+								<p class="muted small">Arquivos</p>
+								<ul id="dev-op-files" class="stack small"></ul>
+							</div>
+							<div id="dev-op-checks-wrap" hidden>
+								<p class="muted small">Verificações</p>
+								<ul id="dev-op-checks" class="stack small"></ul>
+							</div>
+							<div id="dev-op-results-wrap" hidden>
+								<p class="muted small">Resultados</p>
+								<ul id="dev-op-results" class="stack small"></ul>
+							</div>
+							<div class="row">
+								<button id="dev-apply" type="button" hidden>Aplicar</button>
+							</div>
+							<p id="dev-apply-note" class="muted small" hidden></p>
+						</div>
+						<p id="dev-operation-empty" class="muted small" hidden>
+							Nenhuma operação do modo DEV. Quando a Evelyn preparar uma
+							alteração nesta sessão, ela aparece aqui.
+						</p>
+
+						<strong class="small">Checkpoints</strong>
+						<ul id="dev-checkpoints" class="stack"></ul>
+						<p id="dev-checkpoints-empty" class="muted small" hidden>
+							Nenhum checkpoint. Nenhum arquivo foi alterado por esta via.
+						</p>
+						<div class="row">
+							<button id="dev-restore-all" type="button" hidden>Restaurar a última operação</button>
+						</div>
+
+						<!--
+							DEV-9.1: o histórico das execuções do `dev_run`.
+
+							Cada linha é o que o diário grava: comando, onde, quando,
+							a decisão, a duração e o motivo do encerramento. A saída
+							do comando **não** está aqui — o diário não a guarda.
+						-->
+						<div class="row">
+							<strong class="small">Execuções do dev_run</strong>
+							<button id="dev-history-refresh" type="button" class="subtle small">Atualizar</button>
+						</div>
+						<ul id="dev-history" class="stack"></ul>
+						<p id="dev-history-empty" class="muted small" hidden>
+							Nenhuma execução registrada ainda.
+						</p>
+						<p id="dev-history-error" class="error" hidden></p>
+					</div>
+				</details>
+			</section>
+		</div>
+
+		<footer class="drawer-foot">
+			<span id="data-directory" class="muted small"></span>
+		</footer>
+	</aside>
+
+		<div class="resize-handle resize-n" data-dir="n" aria-hidden="true"></div>
 			<div class="resize-handle resize-s" data-dir="s" aria-hidden="true"></div>
 			<div class="resize-handle resize-e" data-dir="e" aria-hidden="true"></div>
 			<div class="resize-handle resize-w" data-dir="w" aria-hidden="true"></div>
@@ -519,7 +1567,7 @@
 			subject, and a sidebar that is always open says otherwise.
 
 			Two ways of being open, and the difference matters. Hovering the edge
-			*peeks* it — the drawer opens and closes itself as the pointer comes
+			*peeks* it —" the drawer opens and closes itself as the pointer comes
 			and goes, because a menu that outlived the gesture would cover the
 			conversation the user moved away to read. Clicking or focusing the
 			handle *pins* it, and only an explicit close or Esc puts it away. Both
@@ -529,7 +1577,7 @@
 
 		<!--
 			`hidden` from the first paint. Without it the drawer starts in its open
-			state, and the open transition has nothing to animate from — the element
+			state, and the open transition has nothing to animate from —" the element
 			is already at `translateX(0)`, so the first hover is a no-op and the
 			menu appears to have no animation at all.
 		-->
@@ -538,3 +1586,6 @@
 		<script src="./index.js"></script>
 	</body>
 </html>
+
+
+

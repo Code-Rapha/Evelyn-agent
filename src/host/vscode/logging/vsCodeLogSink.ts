@@ -38,7 +38,7 @@ export class OutputChannelLogSink implements LogSink {
 			// Logging must never break the extension: a channel can be closed
 			// (e.g. disposed and recreated with the same name by tests or by the
 			// workbench). Fall back to the console in that case.
-			console.warn(`[seshyina] failed to write to output channel: ${String(error)}`);
+			console.warn(`[evelyn] failed to write to output channel: ${String(error)}`);
 			console.log(line);
 		}
 	}

@@ -36,8 +36,8 @@
 	flex: none;
 	height: 36px;
 	padding: 0 0 0 14px;
-	background: rgb(8 21 13 / 92%);
-	border-bottom: 1px solid rgb(122 200 152 / 12%);
+	background: rgb(13 8 21 / 92%);
+	border-bottom: 1px solid rgb(178 142 255 / 12%);
 	/*
 	 * The drag region. Chromium moves the window for a pointer press anywhere in
 	 * this box, which is what a title bar is for — and why the three buttons
@@ -53,6 +53,16 @@
 	font-weight: 600;
 	color: var(--muted);
 	letter-spacing: 0.01em;
+	user-select: none;
+}
+
+/* The Seshyina Agent badge, shown next to the app name once the core is up. */
+.agent-badge {
+	margin-left: 8px;
+	padding: 1px 8px;
+	border: 1px solid rgb(178 142 255 / 35%);
+	border-radius: 999px;
+	color: var(--accent);
 	user-select: none;
 }
 
@@ -83,7 +93,7 @@
 }
 
 .window-button:hover {
-	background: rgb(122 200 152 / 12%);
+	background: rgb(178 142 255 / 12%);
 	color: var(--text);
 	filter: none;
 }
@@ -245,7 +255,7 @@ body[data-maximized='true'] .resize-handle {
 }
 
 /*
- * A layered dark green. Opaque at the base, translucent above it.
+ * A layered dark purple. Opaque at the base, translucent above it.
 	 *
 	 * The window itself cannot be see-through — on Windows `transparent: true`
 	 * takes the native frame with it, and the frame is what carries the title
@@ -263,14 +273,14 @@ body[data-maximized='true'] .resize-handle {
 	 * flat rectangles, and it costs nothing now that there is a real floor
 	 * underneath.
 	 */
-	--background: #08150d;
-	--surface: rgb(12 27 18 / 86%);
-	--surface-raised: rgb(21 40 29 / 90%);
-	--border: rgb(122 200 152 / 20%);
-	--text: #e8f3ec;
-	--muted: #9db3a7;
-	--accent: #63d9a0;
-	--accent-soft: rgb(99 217 160 / 16%);
+	--background: #0d0815;
+	--surface: rgb(20 12 30 / 86%);
+	--surface-raised: rgb(33 22 49 / 90%);
+	--border: rgb(178 142 255 / 20%);
+	--text: #efe8f8;
+	--muted: #a897c2;
+	--accent: #b28eff;
+	--accent-soft: rgb(178 142 255 / 16%);
 	--ok: #5fdc9a;
 	--failed: #ff6b63;
 
@@ -279,15 +289,17 @@ body[data-maximized='true'] .resize-handle {
 	 * trusted with, so the buttons that carry a fill carry their own opaque
 	 * text colour instead of borrowing the window's.
 	 */
-	--on-accent: #06120c;
+	--on-accent: #0f0618;
 
 	/*
 	 * Risk colours, kept amber and red on purpose: these are the two states the
-	 * permission card exists to separate, and tinting them green would make the
+	 * permission card exists to separate, and tinting them accent would make the
 	 * dangerous one look like the ordinary one.
 	 */
 	--risk-moderate: #e0a33e;
 	--risk-dangerous: #e0555a;
+	/* Aviso: chega perto de um limite, nada falhou. */
+	--warning: #e3b341;
 
 	--radius: 10px;
 }
@@ -340,132 +352,196 @@ body {
 	 * over a light desktop the panel would otherwise have no boundary against
 	 * the wallpaper at all.
 	 */
-	box-shadow: inset 0 0 0 1px rgb(122 200 152 / 14%);
+	box-shadow: inset 0 0 0 1px rgb(178 142 255 / 14%);
 }
 
 /* ── topbar ───────────────────────────────────────────────────────────────── */
 
+/*
+ * The status line and the one control that leaves the chat window.
+ *
+ * The left padding clears the edge handle: the handle is a fixed strip down
+ * the first 20px of the window, and the top bar used to start at the very
+ * edge of it - so the status light and the button sat *under* the handle,
+ * half of each.
+ */
 .topbar {
 	display: flex;
 	align-items: center;
-	justify-content: flex-end;
-	padding: 10px 24px;
-	/* Free of the drawer and of the message flow, so the tint here is the only
-	   thing painting — the desktop still shows through. */
+	gap: 10px;
+	padding: 6px 24px 4px 30px;
 }
 
-/*
- * Right-aligned rather than centred. The app name moved up into the titlebar
- * when the OS frame was replaced, and what is left here is the one thing the
- * user glances at when something is wrong — which belongs at the edge a failing
- * dot is actually noticed at.
- */
 .topbar .status {
-	align-items: center;
-	gap: 8px;
-	font-size: 12px;
-	color: var(--muted);
+	flex: 1 1 auto;
+	min-width: 0;
 }
+
+
+/* ── the router console ───────────────────────────────────────────────────── */
 
 /*
- * The settings menu.
-
- * Three lines, drawn rather than typed: a `≡` glyph would render differently
- * per machine under `system-ui`, and the CSP (`default-src 'none'`) rules out
- * an icon font or an image file.
+ * The router panel of the main window, as one card.
+ *
+ * Three levels, read in this order: the **state** (the switch and the mode),
+ * the **last decision**, and the **monitoring**. The labels are what make it
+ * a panel instead of three lines of text - the numbers below only mean
+ * something once you know which question each line answers.
  */
-.menu-button {
-	width: 30px;
-	height: 26px;
-	padding: 0;
-	flex: none;
-	background: transparent;
+.router-console {
+	display: flex;
+	flex-direction: column;
+	gap: 9px;
+	margin: 0 24px 10px;
+	padding: 10px 14px 12px;
+	background: var(--surface);
 	border: 1px solid var(--border);
-	border-radius: 6px;
-	position: relative;
+	border-radius: 10px;
 }
 
-.menu-button:hover:not(:disabled) {
+/* The state row: the switch, the mode, the destination, the way in. */
+.router-bar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	font-size: 12px;
+}
+
+.router-state {
+	display: inline-flex;
+	flex: none;
+}
+
+/* The switch: a button, because a checkbox would look like a form
+   field in a chat window, and this is a state, not a setting. */
+.router-switch {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 10px;
+	font-size: 12px;
+	color: var(--text);
 	background: var(--surface-raised);
-	border-color: var(--accent);
-	filter: none;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	cursor: pointer;
 }
 
-.menu-button:focus-visible {
+.router-switch:hover:not(:disabled) {
+	border-color: var(--accent);
+}
+
+.router-switch:focus-visible {
 	outline: 2px solid var(--accent);
 	outline-offset: 1px;
 }
 
-.menu-button::before {
-	content: "";
-	position: absolute;
-	inset: 0;
-	margin: auto;
-	width: 14px;
-	height: 9px;
-	/* Three rules from one box: a repeating gradient rather than three
-	   pseudo-elements, since only `::before` and `::after` exist. */
-	background: repeating-linear-gradient(
-		to bottom,
-		currentColor 0 1px,
-		transparent 1px 4px
-	);
+/* The dot carries the state; the label says what it is. */
+.router-switch-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--muted);
+	flex: none;
+}
+
+.router-switch[aria-pressed="true"] .router-switch-dot {
+	background: var(--ok);
+}
+
+.router-switch[aria-pressed="false"] {
+	color: var(--muted);
+}
+
+.router-switch[aria-pressed="false"] .router-switch-dot {
+	background: var(--failed);
+}
+
+/*
+ * The mode, as a tag that says which one it is.
+ *
+ * The three modes are not decoration: they say *who decides* - the app, an
+ * external router, or the provider itself. Each one has its own treatment,
+ * so the mode can be read from across the window, before the words.
+ */
+.router-chip {
+	padding: 3px 9px;
+	border-radius: 999px;
+	background: var(--accent-soft);
+	color: var(--text);
+	border: 1px solid var(--border);
+}
+
+/* The app decides: the full accent, because this is the app's own routing. */
+.router-chip[data-mode='native'] {
+	background: var(--accent-soft);
+	border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 	color: var(--text);
 }
 
-/* ── settings navigation ─────────────────────────────────────────────────── */
+/* An external router decides: outlined, because the decision is elsewhere. */
+.router-chip[data-mode='external'] {
+	background: transparent;
+	border-color: var(--accent);
+	color: var(--accent);
+}
+
+/* A provider decides: neutral, because there is no routing left to speak of. */
+.router-chip[data-mode='direct'] {
+	background: var(--surface-raised);
+	border-color: var(--border);
+	color: var(--muted);
+}
+
+/* Where the request goes, next to the mode that sends it there. */
+.router-destination {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.router-configure {
+	flex: none;
+}
 
 /*
-/*
- * The settings window: the section list down the left, the section's panels
- * filling the rest.
+ * The two rows under the state: the last decision and the monitoring.
  *
- * It was a horizontal row of buttons under the header first, which is a tab bar
- * and not a sidebar. A column is also the shape that can grow — headings,
- * nesting and a footer all fit in one, and a row has nowhere to put them.
- *
- * Buttons rather than links: switching section never navigates, the document is
- * the same either way.
+ * A grid, so the two sit side by side when there is room and stack when
+ * there is not - a chat window can be 720px wide or twice that, and the
+ * panel has to read the same in both.
  */
-.settings-nav {
-	display: none;
+.router-facts {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+	gap: 8px 20px;
+	padding-top: 9px;
+	border-top: 1px solid var(--border);
+}
+
+.router-fact {
+	display: flex;
 	flex-direction: column;
 	gap: 2px;
-	padding: 12px;
+	min-width: 0;
 }
 
-body[data-window='settings'] .drawer {
-	display: grid;
-	grid-template-columns: 210px minmax(0, 1fr);
-	grid-template-rows: auto minmax(0, 1fr) auto;
+/* The question the row answers. */
+.router-fact-label {
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--muted);
 }
 
-/*
- * The header spans both columns: it titles the window rather than one column of
- * it. Same for the footer, which reports the data directory for the whole app.
- */
-body[data-window='settings'] .drawer-head,
-body[data-window='settings'] .drawer-foot {
-	grid-column: 1 / -1;
+.router-fact-value {
+	margin: 0;
+	line-height: 1.45;
+	overflow-wrap: anywhere;
 }
 
-body[data-window='settings'] .settings-nav {
-	grid-column: 1;
-	grid-row: 2;
-	/* A divider down the side rather than under it, because the list now runs
-	   beside the content instead of above it. */
-	border-right: 1px solid var(--border);
-	overflow-y: auto;
-}
-
-body[data-window='settings'] .drawer-body {
-	grid-column: 2;
-	grid-row: 2;
-}
-
-body[data-window='settings'] .settings-nav {
-	display: flex;
-}
 
 .settings-nav-item {
 	padding: 7px 12px;
@@ -596,6 +672,10 @@ body[data-window='settings'] .drawer-head h2 {
  * panels live in different wrappers the wrappers simply stack, which is what
  * that window wants anyway.
  *
+ * A coluna B é `only-settings`, então no chat ela não é exibida de jeito
+ * nenhum: o drawer do chat é uma coluna só, com Conversações, Modelo e o
+ * System prompt recolhido.
+ *
  * The settings window maximises, so it has the width to spend on two columns
  * and needs the height back: four panels stacked are taller than any screen,
  * which is why one of them was always below the fold.
@@ -607,8 +687,7 @@ body[data-window='settings'] .drawer-head h2 {
 	min-width: 0;
 }
 
-body[data-window='settings'] .drawer-body {
-	/*
+body[data-window='settings'] .drawer-body {	/*
 	 * One column now. Sections mean only one is ever showing, so a two-column
 	 * grid would leave half a maximised window empty — which is what happened
 	 * before sections existed, when the columns were sized by how many panels
@@ -697,6 +776,35 @@ body[data-window='chat'] .only-settings {
 	display: none;
 }
 
+/*
+ * O drawer do chat: **um painel por vez, em uma coluna**.
+ *
+ * A regra antiga da DEV-8 mostrava `.only-settings` dentro do drawer do chat
+ * quando ele estava aberto, para a seção "Modo DEV" ser alcançável ali. O
+ * efeito colateral era o drawer virar uma segunda janela de configurações,
+ * incompleta (sem as ações que só a janela de configurações oferece) e em duas
+ * colunas.
+ *
+ * Agora o drawer do chat é o que ele deve ser: Conversações (+ Nova), Modelo e
+ * o System prompt recolhido. Tudo o mais vive na janela de configurações, que
+ * continua com o nav e as duas colunas — nada foi removido da aplicação, só
+ * do lugar errado.
+ */
+body[data-window='chat'] .drawer .settings-nav {
+	display: none;
+}
+
+body[data-window='chat'] .drawer .only-settings {
+	display: none;
+}
+
+body[data-window='chat'] .drawer .drawer-col {
+	/* Uma coluna: a coluna B nem é exibida, e a A ocupa a largura toda. */
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
 body:not([data-window]) .only-settings {
 	display: none;
 }
@@ -750,7 +858,7 @@ body[data-window='settings'] .drawer .panel > details > .panel-body {
 .scrim {
 	position: fixed;
 	inset: 0;
-	background: rgb(4 12 7 / 45%);
+	background: rgb(7 4 12 / 45%);
 	z-index: 10;
 	opacity: 0;
 	/*
@@ -777,9 +885,9 @@ body[data-window='settings'] .drawer .panel > details > .panel-body {
 	max-width: 86vw;
 	display: flex;
 	flex-direction: column;
-	/* Opaque enough to read a form against whatever is behind the window: the
+	/* Opague enough to read a form against whatever is behind the window: the
 	   fields are the most text-dense surface in the app. */
-	background: rgb(10 23 15 / 97%);
+	background: rgb(17 10 27 / 97%);
 	border-right: 1px solid var(--border);
 	box-shadow: 8px 0 32px rgb(0 0 0 / 45%);
 	z-index: 11;
@@ -792,7 +900,7 @@ body[data-window='settings'] .drawer .panel > details > .panel-body {
 	 * a single transition on both states would ease both directions identically.
 	 *
 	 * `opacity` rides along with the slide so the panel does not appear to drag
-	 * its own edge — without it the 340px of green holds full strength while
+	 * its own edge — without it the 340px of purple holds full strength while
 	 * moving, which is what makes a naive slide look like a cardboard panel.
 	 */
 	/*
@@ -974,6 +1082,487 @@ transform: none;
 	outline-offset: -2px;
 }
 
+/* ── the router form ─────────────────────────────────────────────────────── */
+
+/*
+ * The mode, as three cards.
+ *
+ * A drop-down with three long options is a poor way to choose between *who
+ * decides*: the whole difference between the three is in the sentence, and
+ * the sentence is what the menu hides. The cards show the whole sentence, so
+ * the choice is made by reading it, not by remembering what the third option
+ * said.
+ */
+.router-modes {
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+.field-legend {
+	display: block;
+	margin: 0 0 7px;
+	padding: 0;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.07em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+.mode-cards {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+	gap: 10px;
+}
+
+.mode-card {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 3px 10px;
+	align-items: start;
+	padding: 11px 13px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	cursor: pointer;
+	color: var(--muted);
+}
+
+.mode-card:hover {
+	border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+/* The chosen one: the only card with the accent fill. */
+.mode-card:has(input:checked) {
+	border-color: var(--accent);
+	background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+	color: var(--text);
+}
+
+.mode-card:focus-within {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+
+.mode-card input[type='radio'] {
+	width: auto;
+	margin: 3px 0 0;
+	accent-color: var(--accent);
+	flex: none;
+}
+
+.mode-card-head {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	flex-wrap: wrap;
+	grid-column: 2;
+}
+
+.mode-card-title {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+/* Who decides, in one word. The whole point of the choice. */
+.mode-card-tag {
+	font-size: 10px;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+	color: var(--muted);
+	padding: 1px 7px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+}
+
+.mode-card-text {
+	grid-column: 2;
+	font-size: 12px;
+	line-height: 1.45;
+	color: var(--muted);
+}
+
+/*
+ * The destinations.
+ *
+ * Only the one the mode points at is shown. The other is not an option the
+ * user can take right now, and a greyed-out control is a question with only
+ * one answer.
+ */
+.router-destinations {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.router-destination {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+}
+
+.router-destinations[data-mode='native'] .router-destination,
+.router-destinations[data-mode='external'] .router-destination[data-mode='direct'],
+.router-destinations[data-mode='direct'] .router-destination[data-mode='external'] {
+	display: none;
+}
+
+.field-hint {
+	margin: 0;
+	line-height: 1.45;
+}
+
+/* The switch, as a row with the consequence next to it. */
+.router-toggle {
+	display: flex;
+	flex-direction: row;
+	align-items: flex-start;
+	gap: 10px;
+	padding: 10px 12px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	color: var(--muted);
+}
+
+.router-toggle input[type='checkbox'] {
+	width: auto;
+	margin: 2px 0 0;
+	accent-color: var(--accent);
+	flex: none;
+}
+
+.router-toggle-text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.router-toggle-title {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+/* ── the connections ───────────────────────────────────────────────────────── */
+
+/*
+ * One card per endpoint.
+ *
+ * A router and a provider are different kinds of thing - one decides which
+ * model answers, the other answers - so the card says which it is before it
+ * says anything else. The rule on the left is that difference, at a glance.
+ */
+.connection-list {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.connection-card {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 12px 14px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+}
+
+.connection-card[data-role='router'] {
+	border-left: 3px solid var(--accent);
+}
+
+.connection-card[data-state='disabled'] {
+	opacity: 0.68;
+}
+
+.connection-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+
+.connection-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	min-width: 0;
+}
+
+.connection-name {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+	overflow-wrap: anywhere;
+}
+
+.connection-actions {
+	display: flex;
+	gap: 6px;
+	flex: none;
+}
+
+.connection-actions button {
+	padding: 5px 10px;
+	font-size: 12px;
+}
+
+.connection-endpoint {
+	margin: 0;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 11.5px;
+	color: var(--muted);
+	overflow-wrap: anywhere;
+}
+
+/*
+ * The facts.
+ *
+ * Every fact carries where it came from, next to the value. A price that
+ * this app declared and a price that the provider published are different
+ * facts, and a reader who cannot tell them apart reads a number as more
+ * certain than it is.
+ */
+.connection-facts {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+	gap: 9px 16px;
+	margin: 0;
+}
+
+.fact {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-areas:
+		"label label"
+		"value origin"
+		"note  note";
+	column-gap: 8px;
+	row-gap: 3px;
+	align-items: center;
+	min-width: 0;
+}
+
+.fact-label {
+	grid-area: label;
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+.fact-value {
+	grid-area: value;
+	font-size: 12px;
+	line-height: 1.4;
+	color: var(--text);
+	overflow-wrap: anywhere;
+}
+
+.fact-value.unknown {
+	color: var(--muted);
+	font-style: italic;
+}
+
+.fact .tag-origin {
+	grid-area: origin;
+	align-self: center;
+}
+
+.fact-note {
+	grid-area: note;
+	font-size: 11px;
+	line-height: 1.4;
+	color: var(--muted);
+}
+
+/* The models the endpoint publishes, as chips. */
+.connection-models {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+.model-chip {
+	font-size: 11px;
+	padding: 2px 8px;
+	border-radius: 6px;
+	background: var(--surface-raised);
+	border: 1px solid var(--border);
+	color: var(--text);
+}
+
+/* One row per model, with its own facts. */
+.connection-model-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin: 0;
+	padding: 9px 0 0;
+	list-style: none;
+	border-top: 1px dashed var(--border);
+}
+
+.connection-model {
+	display: grid;
+	grid-template-columns: minmax(80px, 150px) 1fr;
+	gap: 4px 14px;
+	align-items: baseline;
+}
+
+.connection-model-name {
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--text);
+	overflow-wrap: anywhere;
+}
+
+.connection-model-facts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 18px;
+}
+
+/* ── tags ──────────────────────────────────────────────────────────────────── */
+
+/*
+ * A small label.
+ *
+ * The origin ones exist to make the difference visible: what the app
+ * declared, what the provider published, what was measured, and what is not
+ * known at all.
+ */
+.tag {
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	padding: 2px 8px;
+	border-radius: 999px;
+	border: 1px solid color-mix(in srgb, var(--muted) 32%, transparent);
+	background: color-mix(in srgb, var(--muted) 7%, transparent);
+	color: var(--muted);
+	white-space: nowrap;
+}
+
+/* The role: a router decides, a provider answers. */
+.tag-role[data-role='router'] {
+	color: var(--accent);
+	border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+	background: var(--accent-soft);
+}
+
+/* The state of the connection. */
+.tag-state[data-state='enabled'] {
+	color: var(--ok);
+	border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+
+.tag-state[data-state='disabled'] {
+	color: var(--failed);
+	border-color: color-mix(in srgb, var(--failed) 45%, transparent);
+}
+
+/* The origin of a value. */
+.tag-origin[data-origin='ours'] {
+	color: var(--accent);
+	border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+	background: var(--accent-soft);
+}
+
+/* Published by the provider: from outside, and marked as such. */
+.tag-origin[data-origin='theirs'] {
+	border-style: dashed;
+	color: color-mix(in srgb, var(--text) 75%, transparent);
+}
+
+/* An estimate is neither a measurement nor a published limit. */
+.tag-origin[data-origin='estimate'] {
+	border-style: dashed;
+	color: var(--risk-moderate);
+	border-color: color-mix(in srgb, var(--risk-moderate) 55%, transparent);
+}
+
+/* Not known: no border to imply a value. */
+.tag-origin[data-origin='unknown'] {
+	border-style: dotted;
+	opacity: 0.75;
+}
+
+
+/* ── the settings button in the top bar ───────────────────────────────────── */
+
+/*
+ * The button that opens the settings **window**, in the top bar.
+ *
+ * The edge handle is a fixed strip down the left edge of the window, and the
+ * top bar starts at that same edge: the two overlap, and the handle — being
+ * fixed and on top — swallowed every click on the button. The button looked
+ * there and worked like the handle, which is the worst kind of broken: the
+ * user clicks "Settings" and the drawer opens instead.
+ *
+ * `relative` with a z-index above the handle puts the button back in front
+ * of it. The layout does not move: the button stays exactly where it was,
+ * and the handle keeps the rest of the strip.
+ */
+.menu-button {
+	position: relative;
+	z-index: 14;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 24px;
+	flex: none;
+	padding: 0;
+	background: var(--surface-raised);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	cursor: pointer;
+}
+
+.menu-button:hover:not(:disabled) {
+	border-color: var(--accent);
+}
+
+/*
+ * The glyph: three bars, drawn here rather than shipped as an image.
+ *
+ * The button used to be an empty element with the accent background, which
+ * read as a smudge in the corner - a control with no shape and no
+ * name, in the one place the user looks first.
+ */
+.menu-button::before {
+	content: '';
+	width: 12px;
+	height: 2px;
+	border-radius: 999px;
+	background: var(--muted);
+	box-shadow:
+		0 -4px 0 var(--muted),
+		0 4px 0 var(--muted);
+}
+
+.menu-button:hover::before {
+	background: var(--accent);
+	box-shadow:
+		0 -4px 0 var(--accent),
+		0 4px 0 var(--accent);
+}
+
+.menu-button:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.edge-handle-grip {
 		transition: none;
@@ -1019,19 +1608,29 @@ transform: none;
 	font-size: 13px;
 }
 
-.dot {
+/*
+ * The status light.
+ *
+ * `.status .dot` and not `.dot`: the class `ok` also marks a success
+ * *message*, and that rule brings padding and a border with it. With the
+ * same specificity the later rule won, and the status light was drawn as a
+ * small green button instead of a light.
+ */
+.status .dot {
 	width: 8px;
 	height: 8px;
+	padding: 0;
+	border: 0;
 	border-radius: 50%;
 	background: var(--muted);
 	flex: none;
 }
 
-.dot.ok {
+.status .dot.ok {
 	background: var(--ok);
 }
 
-.dot.failed {
+.status .dot.failed {
 	background: var(--failed);
 }
 
@@ -1203,6 +1802,54 @@ button.danger {
 	border: 1px solid var(--failed);
 }
 
+/* ── controle do serviço local ───────────────────────────────────────────── */
+
+.service-control {
+	margin: 12px 0;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+}
+
+.service-control-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.service-control-title {
+	font-size: 13px;
+	font-weight: 500;
+}
+
+.service-state {
+	font-size: 11px;
+	padding: 2px 8px;
+	border-radius: 999px;
+	border: 1px solid transparent;
+	white-space: nowrap;
+}
+
+.service-state[data-state='active'] {
+	color: var(--accent);
+	border-color: var(--accent);
+	background: var(--accent-soft);
+}
+
+.service-state[data-state='starting'],
+.service-state[data-state='stopping'],
+.service-state[data-state='inactive'] {
+	color: var(--muted);
+	border-color: var(--muted);
+}
+
+.service-state[data-state='error'] {
+	color: var(--failed);
+	border-color: var(--failed);
+}
+
+
 button.subtle {
 	padding: 5px 10px;
 	font-size: 12px;
@@ -1276,7 +1923,11 @@ button.subtle {
 	font: inherit;
 	text-align: left;
 	cursor: pointer;
-	min-width: 0;
+	/* Um título longo é cortado com "…", não empurra a lixeira para fora da
+	   coluna nem alarga a lista. */
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .conversation:hover {
@@ -1286,6 +1937,56 @@ button.subtle {
 .conversation.selected {
 	background: var(--accent-soft);
 	border-color: var(--accent);
+}
+
+/* ── linha da conversa: o título abre, a lixeira apaga ───────────────────── */
+
+.conversation-row {
+	align-items: center;
+	gap: 2px;
+}
+
+.conversation-delete {
+	flex: 0 0 auto;
+	width: 26px;
+	height: 26px;
+	display: grid;
+	place-items: center;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--muted);
+	font: inherit;
+	font-size: 16px;
+	line-height: 1;
+	cursor: pointer;
+	/* Presente ao passar o mouse, e sempre pelo teclado: uma lista de lixeiras
+	   permanentes é exatamente a poluição que esta linha remove. */
+	opacity: 0;
+	transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.conversation-row:hover .conversation-delete,
+.conversation-delete:focus-visible {
+	opacity: 1;
+}
+
+.conversation-delete:hover {
+	color: var(--risk-dangerous);
+	border-color: var(--risk-dangerous);
+}
+
+.conversation-delete:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+
+.conversation-pinned {
+	flex: 0 0 auto;
+	width: 26px;
+	text-align: center;
+	color: var(--muted);
+	font-size: 11px;
 }
 
 .conversation .name {
@@ -1520,6 +2221,129 @@ button.subtle {
 	animation: blink 1s steps(2, start) infinite;
 }
 
+/*
+ * Markdown do assistente.
+ *
+ * O balão usa `pre-wrap` porque uma resposta sem Markdown é texto com as
+ * quebras do modelo. Quando há blocos, quem cuida do espaçamento é o bloco —
+ * e o `pre-wrap` do balão transformaria cada quebra entre `<p>` num espaço
+ * em branco extra.
+ */
+.message.assistant .bubble:has(> :not(:only-child):not(span)) {
+	white-space: normal;
+}
+
+.message.assistant .bubble > :first-child {
+	margin-top: 0;
+}
+
+.message.assistant .bubble > :last-child {
+	margin-bottom: 0;
+}
+
+.message.assistant .bubble p,
+.message.assistant .bubble ul,
+.message.assistant .bubble ol,
+.message.assistant .bubble pre,
+.message.assistant .bubble blockquote,
+.message.assistant .bubble table {
+	margin: 0 0 8px;
+}
+
+.message.assistant .bubble p {
+	white-space: pre-wrap;
+}
+
+.message.assistant .bubble ul,
+.message.assistant .bubble ol {
+	padding-left: 20px;
+}
+
+.message.assistant .bubble li {
+	margin: 2px 0;
+}
+
+.message.assistant .bubble h1,
+.message.assistant .bubble h2,
+.message.assistant .bubble h3,
+.message.assistant .bubble h4,
+.message.assistant .bubble h5,
+.message.assistant .bubble h6 {
+	margin: 12px 0 6px;
+	line-height: 1.3;
+}
+
+.message.assistant .bubble h1 {
+	font-size: 1.35em;
+}
+
+.message.assistant .bubble h2 {
+	font-size: 1.2em;
+}
+
+.message.assistant .bubble h3 {
+	font-size: 1.08em;
+}
+
+.message.assistant .bubble code {
+	font-family: var(--mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+	font-size: 0.92em;
+	background: color-mix(in srgb, var(--border) 45%, transparent);
+	border-radius: 4px;
+	padding: 1px 4px;
+}
+
+.message.assistant .bubble pre {
+	background: color-mix(in srgb, var(--border) 30%, transparent);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 10px 12px;
+	overflow-x: auto;
+	/* Código não quebra: a indentação é informação. */
+	white-space: pre;
+}
+
+.message.assistant .bubble pre code {
+	background: transparent;
+	padding: 0;
+	font-size: 0.92em;
+}
+
+.message.assistant .bubble blockquote {
+	border-left: 3px solid var(--border);
+	padding-left: 10px;
+	color: var(--muted);
+}
+
+.message.assistant .bubble table {
+	border-collapse: collapse;
+	font-size: 0.95em;
+	display: block;
+	overflow-x: auto;
+}
+
+.message.assistant .bubble th,
+.message.assistant .bubble td {
+	border: 1px solid var(--border);
+	padding: 4px 8px;
+	white-space: normal;
+}
+
+.message.assistant .bubble th {
+	font-weight: 600;
+	background: color-mix(in srgb, var(--border) 30%, transparent);
+}
+
+.message.assistant .bubble hr {
+	border: 0;
+	border-top: 1px solid var(--border);
+	margin: 10px 0;
+}
+
+.message.assistant .bubble a {
+	color: var(--accent);
+}
+
 @keyframes blink {
 	to {
 		visibility: hidden;
@@ -1562,7 +2386,7 @@ button.subtle {
 	border-radius: 14px;
 	/* Lighter than the app behind it, so the HUD separates without a heavy
 	   fill. Over a bright desktop this still composites dark enough to read. */
-	background: rgb(12 27 18 / 82%);
+	background: rgb(20 12 30 / 82%);
 	box-shadow: 0 8px 32px rgb(0 0 0 / 40%);
 }
 
@@ -1786,4 +2610,102 @@ button.subtle {
 	font-size: 10px;
 	color: var(--muted);
 	text-align: right;
+}
+
+/* Budget: warnings and the per-conversation list.
+
+   A warning is deliberately not the error style: nothing failed. The
+   "esgotado" case reuses `error` from the renderer, because a limit that has
+   already blocked a paid call is a failure the user should see first. */
+.budget-alerts {
+	margin: 0;
+	padding-left: 18px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	font-size: 12px;
+}
+
+.budget-alerts .warning {
+	color: var(--warning, #c98a00);
+	overflow-wrap: anywhere;
+}
+
+.budget-alerts .error {
+	padding: 0;
+	border: 0;
+	background: none;
+}
+
+.budget-conversations {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.budget-conversation {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 6px 0;
+	border-top: 1px solid var(--border);
+}
+
+.budget-conversation:first-child {
+	border-top: 0;
+}
+
+.budget-conversation p,
+.budget-conversation ul {
+	margin: 0;
+}
+
+.budget-conversation ul {
+	padding-left: 18px;
+}
+/* ── narrow windows ────────────────────────────────────────────────────────── */
+
+/*
+ * The window can be 720px wide or twice that, and the router panel has to
+ * read the same in both: the state row wraps before it truncates, and the
+ * facts stack instead of squeezing into an unreadable column.
+ *
+ * The connection cards follow the same rule - the facts grid drops to one
+ * column, and a model's name gets its own line instead of a narrow gutter.
+ */
+@media (max-width: 820px) {
+	.router-console {
+		margin: 0 16px 10px;
+		padding: 10px 12px;
+	}
+
+	.router-facts {
+		grid-template-columns: 1fr;
+		gap: 7px;
+	}
+
+	.router-destination {
+		flex-basis: 100%;
+	}
+
+	/* The way in goes to the right of its own line, not to the left of it. */
+	.router-configure {
+		margin-left: auto;
+	}
+
+	.mode-cards {
+		grid-template-columns: 1fr;
+	}
+
+	.connection-facts {
+		grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+	}
+
+	.connection-model {
+		grid-template-columns: 1fr;
+	}
+
+	.connection-head {
+		align-items: flex-start;
+	}
 }

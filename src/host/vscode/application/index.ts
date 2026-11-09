@@ -32,7 +32,12 @@ import { VsCodeSecretStore } from '../storage/vsCodeSecretStore';
 import { VsCodeStateStore } from '../storage/vsCodeStateStore';
 import { OutputChannelLogSink } from '../logging/vsCodeLogSink';
 import { ProviderConfigService } from '../../../core/providers/config';
+import { FileStorageService } from '../../../adapters/local/fileStorageService';
+import { createFileMemoryService } from '../../../core/memory/fileMemoryService';
+import { createFileSkillService } from '../../../core/skill/fileSkillService';
 import type { Provider } from '../../../core/providers/types';
+import type { MemoryService } from '../../../core/memory/types';
+import type { SkillService } from '../../../core/skill/types';
 
 export class ModelHubApplication implements vscode.Disposable {
 	private readonly disposables = new DisposableCollection();
@@ -43,6 +48,8 @@ export class ModelHubApplication implements vscode.Disposable {
 	private readonly secrets: VsCodeSecretStore;
 	private readonly config: ProviderConfigService;
 	private readonly treeProvider: ModelHubTreeProvider;
+	private readonly memoryService: MemoryService;
+	private readonly skillService: SkillService;
 
 	/**
 	 * One unregister per provider registered this session. Restored and
@@ -69,12 +76,12 @@ export class ModelHubApplication implements vscode.Disposable {
 		this.services.register(this.providers);
 		this.services.register(this.config);
 
-		// Apply user-configured log level (modelhub.general.logLevel).
-		this.logger.setLevel(
-			this.configuration.get<LogLevel>('general', 'logLevel', 'info'),
-		);
+		// 5. Memory service for memory, rules and skills.
+		const storage = new FileStorageService();
+		this.memoryService = createFileMemoryService(storage);
+		this.skillService = createFileSkillService(storage);
 
-		// 5. UI — view + commands, both driven by the same injected context.
+		// 6. UI — view + commands, both driven by the same injected context.
 		const uiContext = createUiContext(this.version(context), this.providers);
 		this.treeProvider = new ModelHubTreeProvider(uiContext);
 		this.disposables.push(registerModelHubView(this.treeProvider));
@@ -89,6 +96,20 @@ export class ModelHubApplication implements vscode.Disposable {
 				lifecycle: this.lifecycle(),
 			}),
 		);
+	}
+
+	/**
+	 * Initializes async services that require filesystem access.
+	 */
+	private async initializeAsyncServices(): Promise<void> {
+		// Local storage service for memory, rules and skills.
+		const storage = new FileStorageService();
+		await storage.initialize();
+		this.services.register(storage);
+		// Register memory service
+		this.services.register(this.memoryService);
+		// Register skill service
+		this.services.register(this.skillService);
 	}
 
 	/**
@@ -157,6 +178,7 @@ export class ModelHubApplication implements vscode.Disposable {
 	 */
 	static async start(context: vscode.ExtensionContext): Promise<ModelHubApplication> {
 		const application = new ModelHubApplication(context);
+		await application.initializeAsyncServices();
 		await application.services.initializeAll();
 		const restored = application.restorePersistedProviders();
 		context.subscriptions.push(application);

@@ -28,9 +28,12 @@
  *   `PermissionRequest`, so this file formats what it is given and never inspects
  *   a value for anything.
  */
+import { randomBytes } from 'node:crypto';
+
 import type { PermissionDecision, PermissionGateway, PermissionRequest } from '../core/permissions/gateway';
 import { REDACTED } from '../core/permissions/gateway';
 import type { PermissionAnswer, PermissionPrompt } from './contract';
+import { classifyRequest, grantCovers, extendGrant, type GrantScope } from './permissionScope';
 
 /** How long to wait for a person before assuming they are gone. */
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -53,7 +56,14 @@ export interface DecisionReport {
 	readonly id: string;
 	readonly toolName: string;
 	readonly decision: 'allow' | 'deny';
-	readonly source: 'user' | 'cancelled';
+	/**
+	 * De onde veio a decisão.
+	 *
+	 * `automatic` e `grant` são as duas formas de permitir sem diálogo — e o
+	 * que a interface precisa distinguir na linha do tempo. `cancelled` é a
+	 * negação que ninguém escolheu: tempo esgotado, parada, janela fechada.
+	 */
+	readonly source: 'user' | 'cancelled' | 'automatic' | 'grant';
 	/**
 	 * The turn the request belonged to.
 	 *
@@ -62,6 +72,8 @@ export interface DecisionReport {
 	 * resolution whose `turnId` is not the one it is watching.
 	 */
 	readonly turnId: string;
+	/** O escopo que autorizou, quando a fonte é `automatic` ou `grant`. */
+	readonly scope?: string;
 }
 
 export interface PermissionBrokerOptions {
@@ -71,6 +83,23 @@ export interface PermissionBrokerOptions {
 	readonly timeoutMs?: number;
 	/** Injected in tests so no real timer has to expire. */
 	readonly now?: () => number;
+	/** Injetado em teste; ausente = um por broker (R4C). */
+	readonly brokerId?: string;
+	/**
+	 * A raiz do repositório DEV, quando esta tarefa pode escrever nele.
+	 *
+	 * É ela que dá **escopo** à concessão. Sem raiz, nenhuma escrita é
+	 * classificada como escopo e o caminho antigo vale: perguntar a cada uma.
+	 */
+	readonly devRoot?: string;
+	/**
+	 * Liga a autorização por escopo (leitura automática, escrita por tarefa).
+	 *
+	 * Desligada por padrão: o comportamento histórico é o de sempre — só
+	 * `safe` passa sem pergunta. Quem liga é o host, quando a pessoa escolheu
+	 * uma tarefa de várias etapas; desligar é o jeito de voltar a pedir tudo.
+	 */
+	readonly scopedGrants?: boolean;
 }
 
 export class PermissionBroker {
@@ -78,11 +107,30 @@ export class PermissionBroker {
 	private readonly emit: PermissionBrokerOptions['emit'];
 	private readonly generateId: () => string;
 	private readonly timeoutMs: number;
+	private readonly devRoot: string | undefined;
+	private readonly scopedGrants: boolean;
+	/**
+	 * O que já foi concedido **nesta tarefa**, por chave de escopo.
+	 *
+	 * Vive no broker, que é criado por turno (R4C): a concessão não atravessa
+	 * turnos, e um broker nunca vê a concessão de outro.
+	 */
+	private grant: GrantScope;
 	private counter = 0;
 
 	constructor(options: PermissionBrokerOptions) {
 		this.emit = options.emit;
-		this.generateId = options.generateId ?? (() => `perm-${++this.counter}`);
+		this.devRoot = options.devRoot;
+		this.scopedGrants = options.scopedGrants ?? false;
+		this.grant = { taskId: options.brokerId ?? '', keys: new Set<string>() };
+		// R4C: o id carrega o broker. Antes era `perm-1` num contador que
+		// começa em zero **por broker** — como agora há um broker por turno,
+		// dois turnos simultâneos geravam o mesmo `perm-1`, e a resposta de um
+		// podia ser aplicada à pergunta do outro. O prefixo aleatório torna
+		// cada id único entre brokers, e a interface continua vendo um id
+		// opaco, como antes.
+		const brokerId = options.brokerId ?? randomBytes(6).toString('hex');
+		this.generateId = options.generateId ?? (() => `perm-${brokerId}-${++this.counter}`);
 		this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 	}
 
@@ -104,12 +152,58 @@ export class PermissionBroker {
 			if (request.riskLevel === 'safe') {
 				return { decision: 'allow' };
 			}
+			// Com a autorização por escopo ligada, a classe do pedido decide:
+			// leitura passa, escrita dentro do escopo já concedido passa, e o
+			// resto pergunta — sem que nenhuma concessão cubra o que é perigoso.
+			if (this.scopedGrants) {
+				const verdict = classifyRequest(request, {
+					...(this.devRoot !== undefined ? { root: this.devRoot } : {}),
+				});
+				if (verdict.kind === 'automatic') {
+					return this.allowedAutomatically(request);
+				}
+				if (verdict.kind === 'scoped' && grantCovers(this.grant.keys, verdict.key)) {
+					return this.allowedByGrant(request, verdict.key);
+				}
+			}
 			// The signal goes through: a turn stopped while the dialog is open has
 			// to deny the request, or the turn waits forever for an answer to a
 			// question the user just withdrew.
 			return this.askUser(request, request.sessionId, options?.signal);
 		},
 	};
+
+	/**
+	 * Uma leitura autorizada sozinha, anunciada como tal.
+	 *
+	 * O anúncio existe para a interface poder mostrar "lido sem confirmar" em
+	 * vez de deixar a linha do tempo sem explicação — uma permissão que
+	 * aparece sem nunca ter sido pedida parece falha de segurança.
+	 */
+	private allowedAutomatically(request: PermissionRequest): PermissionDecision {
+		this.emit('resolved', {
+			id: this.generateId(),
+			toolName: request.toolName,
+			decision: 'allow',
+			source: 'automatic',
+			turnId: request.sessionId,
+			scope: 'leitura',
+		});
+		return { decision: 'allow' };
+	}
+
+	/** Uma concessão da tarefa cobre este pedido. */
+	private allowedByGrant(request: PermissionRequest, key: string): PermissionDecision {
+		this.emit('resolved', {
+			id: this.generateId(),
+			toolName: request.toolName,
+			decision: 'allow',
+			source: 'grant',
+			turnId: request.sessionId,
+			scope: key,
+		});
+		return { decision: 'allow' };
+	}
 
 	/**
 	 * Opens a prompt and waits for the answer.
@@ -170,6 +264,19 @@ export class PermissionBroker {
 		const entry = this.pending.get(answer.id);
 		if (entry === undefined || entry.settled) {
 			return false;
+		}
+		// Um "permitir" que o usuário deu para um pedido de escopo **estende** a
+		// concessão da tarefa: é isso que faz as etapas seguintes da mesma
+		// tarefa não perguntarem de novo. Só o que é `scoped` entra aqui; o
+		// perigoso continua perguntando a cada vez, porque a classe dele é
+		// `explicit` e nunca chega a este ponto.
+		if (answer.decision === 'allow' && this.scopedGrants) {
+			const verdict = classifyRequest(entry.request, {
+				...(this.devRoot !== undefined ? { root: this.devRoot } : {}),
+			});
+			if (verdict.kind === 'scoped') {
+				this.grant = extendGrant(this.grant, [verdict.key]);
+			}
 		}
 		this.settle(
 			answer.id,
