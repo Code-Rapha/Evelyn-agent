@@ -166,6 +166,8 @@
     "desktop:build": "node esbuild.desktop.js",
     "desktop:watch": "node esbuild.desktop.js --watch",
     "desktop:start": "npm run desktop:build && electron dist/desktop/main.js",
+    "desktop:dev": "node esbuild.desktop.js && npm-run-all --parallel --race desktop:watch desktop:dev-app",
+    "desktop:dev-app": "electron dist/desktop/main.js",
     "desktop:package": "npm run check-types && npm run lint && node esbuild.desktop.js --production && node package.desktop.js",
     "web:build": "node esbuild.web.js",
     "web:start": "node dist/web/main.js"
