@@ -363,6 +363,46 @@ suite('Skill Discovery', () => {
 		assert.ok(requests.length > 0);
 	});
 
+	// ── Relevance: a shared stopword is not a subject ────────────────────────
+
+	test('discover does not load a skill for an unrelated question', async () => {
+		await skillService.createSkill({
+			id: 'teste',
+			title: 'Skill de Teste',
+			description:
+				'Skill trivial criada a pedido do usuário para validar o fluxo de criação de skills.',
+			instructions: 'Confirme que a skill está ativa.',
+			tags: ['teste', 'validação'],
+		});
+
+		// Medido antes do filtro de palavras vazias: as duas primeiras
+		// carregavam a skill com score 0.100 e 0.086, só pelo "de" em comum.
+		for (const query of [
+			'como faço um bolo de chocolate?',
+			'me ajude a corrigir este bug de TypeScript',
+			'quero criar uma skill nova',
+		]) {
+			const result = await discoveryService.discover({ query, maxSkills: 3 });
+			assert.deepStrictEqual(result.skills, [], `"${query}" não deveria carregar skill`);
+		}
+	});
+
+	test('discover still loads a skill when the question is about it', async () => {
+		await skillService.createSkill({
+			id: 'teste',
+			title: 'Skill de Teste',
+			description:
+				'Skill trivial criada a pedido do usuário para validar o fluxo de criação de skills.',
+			instructions: 'Confirme que a skill está ativa.',
+			tags: ['teste', 'validação'],
+		});
+
+		const result = await discoveryService.discover({ query: 'faça um teste', maxSkills: 3 });
+
+		assert.strictEqual(result.skills.length, 1);
+		assert.strictEqual(result.skills[0].skill.id, 'teste');
+	});
+
 	// ── Integration ──────────────────────────────────────────────────────────
 
 	test('full discovery workflow: discover → load → format', async () => {

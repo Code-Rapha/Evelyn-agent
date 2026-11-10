@@ -36,9 +36,39 @@ const SKILL_BLOCK_MID = '">';
 const SKILL_BLOCK_END = '</skill>';
 
 /**
+ * Words that do not identify a subject.
+ *
+ * Measured before this list existed: "como faço um bolo de chocolate?" loaded
+ * the test skill with score 0.100, and "me ajude a corrigir este bug de
+ * TypeScript" with 0.086. The only token that matched was "de" — the skill is
+ * called "Skill de Teste". Removing articles, prepositions, pronouns and the
+ * word "skill" itself leaves only what the sentence is actually about, so a
+ * skill is loaded for its subject and not for a shared conjunction.
+ */
+const STOPWORDS = new Set([
+	// pt-BR
+	'a', 'as', 'o', 'os', 'um', 'uma', 'uns', 'umas', 'ao', 'aos',
+	'de', 'do', 'da', 'dos', 'das', 'em', 'no', 'na', 'nos', 'nas',
+	'por', 'para', 'pra', 'com', 'sem', 'que', 'e', 'ou', 'se',
+	'eu', 'voce', 'você', 'me', 'te', 'lhe', 'isso', 'isto', 'este', 'esta',
+	'esse', 'essa', 'meu', 'minha', 'seu', 'sua', 'ser', 'foi',
+	'como', 'qual', 'quais', 'quando', 'onde', 'mais', 'muito',
+	'ja', 'já', 'nao', 'não', 'sim', 'pelo', 'pela', 'pelos', 'pelas',
+	// en
+	'an', 'the', 'and', 'or', 'of', 'to', 'in', 'on', 'for', 'with',
+	'is', 'are', 'be', 'this', 'that', 'it', 'my', 'your',
+	'use', 'using', 'load', 'do', 'does', 'how', 'what', 'when', 'where',
+	'which', 'who',
+	// the vocabulary of skills, not of what a skill is about
+	'skill', 'skills',
+]);
+
+/**
  * Tokenizes text for matching.
  *
  * Normalizes to lowercase, removes punctuation, and splits on whitespace.
+ * Stopwords are dropped so relevance is decided by the subject, not by a
+ * shared article or preposition.
  */
 function tokenize(text: string): Set<string> {
 	const normalized = text
@@ -46,7 +76,7 @@ function tokenize(text: string): Set<string> {
 		.replace(/[^\p{L}\p{N}\s]/gu, ' ')
 		.replace(/\s+/g, ' ')
 		.trim();
-	const tokens = normalized.split(' ').filter((t) => t.length > 1);
+	const tokens = normalized.split(' ').filter((t) => t.length > 1 && !STOPWORDS.has(t));
 	return new Set(tokens);
 }
 
