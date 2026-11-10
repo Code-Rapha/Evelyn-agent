@@ -403,6 +403,49 @@ suite('Skill Discovery', () => {
 		assert.strictEqual(result.skills[0].skill.id, 'teste');
 	});
 
+	// ── Explicit requests: names, not articles ──────────────────────────────
+
+	test('extractSkillRequests ignores the article in "use a skill X"', () => {
+		assert.deepStrictEqual(extractSkillRequests('use a skill teste'), ['teste']);
+		assert.deepStrictEqual(extractSkillRequests('use a skill Skill de Teste'), [
+			'skill-de-teste',
+		]);
+	});
+
+	test('extractSkillRequests understands pt-BR requests', () => {
+		assert.deepStrictEqual(extractSkillRequests('carregue a skill de teste'), ['teste']);
+		assert.deepStrictEqual(extractSkillRequests('ative a skill de revisão de PR'), [
+			'revisao-de-pr',
+		]);
+	});
+
+	test('extractSkillRequests stops at the clause after the name', () => {
+		assert.deepStrictEqual(extractSkillRequests('use a skill teste para revisar o diff'), [
+			'teste',
+		]);
+	});
+
+	test('discover matches an explicit request by canonical title or prefix', async () => {
+		await skillService.createSkill({
+			id: 'revisao-de-pr',
+			title: 'Revisão de Pull Request',
+			description: 'Revisa um pull request.',
+			instructions: 'Leia o diff.',
+		});
+
+		const result = await discoveryService.discover({
+			query: 'help me',
+			maxSkills: 3,
+			requestedSkillIds: ['skill-de-teste', 'revisao'],
+		});
+
+		// "skill-de-teste" não existe; "revisao" é prefixo de "revisao-de-pr".
+		assert.deepStrictEqual(result.missing, ['skill-de-teste']);
+		assert.strictEqual(result.skills.length, 1);
+		assert.strictEqual(result.skills[0].skill.id, 'revisao-de-pr');
+		assert.strictEqual(result.skills[0].score, 1.0);
+	});
+
 	// ── Integration ──────────────────────────────────────────────────────────
 
 	test('full discovery workflow: discover → load → format', async () => {

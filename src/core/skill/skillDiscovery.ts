@@ -64,6 +64,47 @@ const STOPWORDS = new Set([
 ]);
 
 /**
+ * Connector words inside a skill name.
+ *
+ * Used to compare a request with an id or title: "Skill de Teste" and
+ * "skill-de-teste" meet at "skill-teste". The word "skill" is not a connector
+ * here — it can be part of an id ("skill-name") — and a request that only says
+ * "skill" is rejected as a meta-word instead.
+ */
+const NAME_CONNECTORS = new Set([
+	'a', 'as', 'o', 'os', 'um', 'uma', 'uns', 'umas',
+	'de', 'do', 'da', 'dos', 'das', 'em', 'no', 'na', 'nos', 'nas',
+	'the', 'an', 'of', 'to', 'for', 'with', 'and', 'or',
+]);
+
+/** Words that name no skill when they are the whole request. */
+const META_SKILL_WORDS = new Set(['skill', 'skills']);
+
+/**
+ * Words that start a new clause inside a captured name.
+ *
+ * "teste para revisar" names the skill "teste"; "Skill de Teste" keeps both
+ * sides because "de" is part of the name. Without this split, a capture of
+ * "teste para revisar" would become the name "teste-revisar".
+ */
+const CLAUSE_BOUNDARIES = new Set([
+	'para', 'pra', 'com', 'sem', 'por', 'que', 'e', 'ou',
+	'to', 'for', 'with', 'and', 'or', 'in', 'on',
+]);
+
+/** The part of a captured phrase before the first clause boundary. */
+function clausePrefix(value: string): string {
+	const parts = value
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.toLowerCase()
+		.split(/[^a-z0-9]+/)
+		.filter((part) => part.length > 0);
+	const cut = parts.findIndex((part) => CLAUSE_BOUNDARIES.has(part));
+	return (cut >= 0 ? parts.slice(0, cut) : parts).join(' ');
+}
+
+/**
  * Tokenizes text for matching.
  *
  * Normalizes to lowercase, removes punctuation, and splits on whitespace.
@@ -78,6 +119,36 @@ function tokenize(text: string): Set<string> {
 		.trim();
 	const tokens = normalized.split(' ').filter((t) => t.length > 1 && !STOPWORDS.has(t));
 	return new Set(tokens);
+}
+
+/**
+ * Normalizes a skill id, title or request to kebab-case.
+ *
+ * Accents are removed so "revisão" and "revisao" are the same word. Connectors
+ * are kept here: an id like "skill-name" is a name, and dropping its "skill"
+ * would turn it into "name".
+ */
+function normalizeSkillName(value: string): string {
+	return value
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.toLowerCase()
+		.split(/[^a-z0-9]+/)
+		.filter((part) => part.length > 0)
+		.join('-');
+}
+
+/**
+ * Reduces a name to what it identifies, for comparison only.
+ *
+ * Connector words are removed so "Skill de Teste" and "teste" meet at
+ * "skill-teste" / "teste"; the id "teste" still matches its own title.
+ */
+function canonicalSkillName(value: string): string {
+	return normalizeSkillName(value)
+		.split('-')
+		.filter((part) => part.length > 0 && !NAME_CONNECTORS.has(part))
+		.join('-');
 }
 
 /**
@@ -210,49 +281,69 @@ export function createSkillDiscoveryService(skillService: SkillService): SkillDi
 			// Track requested skills for missing check
 			const requestedIds = new Set(input.requestedSkillIds ?? []);
 			const foundSkillIds = new Set<string>();
+			const foundRequests = new Set<string>();
 			const missing: string[] = [];
 
-			// Handle explicit requests first
-			const requestedIdsCopy = new Set(requestedIds);
+			// Handle explicit requests first. A request is compared by canonical
+			// name, so "Skill de Teste", "skill-de-teste" and "teste" all reach
+			// the same skill; a partial name ("revisao" for "revisao-de-pr") is
+			// accepted only after no exact match exists.
 			const explicitMatches: ScoredSkill[] = [];
 			const discoveredMatches: ScoredSkill[] = [];
 
+			const canonicalSkills = listResult.skills.map((skill) => ({
+				skill,
+				id: canonicalSkillName(skill.id),
+				title: canonicalSkillName(skill.title),
+			}));
+
+			for (const requested of requestedIds) {
+				const wanted = canonicalSkillName(requested);
+				if (wanted.length === 0) {
+					continue;
+				}
+				const exact = canonicalSkills.find(
+					(entry) =>
+						!foundSkillIds.has(entry.skill.id) &&
+						(entry.id === wanted || entry.title === wanted),
+				);
+				const partial =
+					exact === undefined
+						? canonicalSkills.find(
+								(entry) =>
+									!foundSkillIds.has(entry.skill.id) &&
+									wanted.length >= 3 &&
+									(entry.id.startsWith(wanted) || wanted.startsWith(entry.id)),
+							)
+						: undefined;
+				const match = exact ?? partial;
+				if (match === undefined) {
+					continue;
+				}
+				explicitMatches.push({
+					skill: match.skill,
+					score: 1.0,
+					matchedBy: ['title'], // Mark as matched to indicate explicit request
+				});
+				foundSkillIds.add(match.skill.id);
+				foundRequests.add(requested);
+			}
+
+			for (const requested of requestedIds) {
+				if (!foundRequests.has(requested)) {
+					missing.push(requested);
+				}
+			}
+
 			for (const skill of listResult.skills) {
-				// Check if explicitly requested by ID
-				if (requestedIds.has(skill.id)) {
-					explicitMatches.push({
-						skill,
-						score: 1.0,
-						matchedBy: ['title'], // Mark as matched to indicate explicit request
-					});
-					foundSkillIds.add(skill.id);
-					requestedIdsCopy.delete(skill.id);
+				if (foundSkillIds.has(skill.id)) {
 					continue;
 				}
-
-				// Check if requested by name (case-insensitive)
-				const normalizedTitle = skill.title.toLowerCase().trim();
-				if (requestedIds.has(normalizedTitle)) {
-					explicitMatches.push({
-						skill,
-						score: 1.0,
-						matchedBy: ['title'],
-					});
-					foundSkillIds.add(skill.id);
-					requestedIdsCopy.delete(normalizedTitle);
-					continue;
-				}
-
 				// Score by relevance
 				const scored = scoreSkill(skill, queryTokens, availableTools);
 				if (scored.score > 0) {
 					discoveredMatches.push(scored);
 				}
-			}
-
-			// Any remaining requested IDs are missing
-			for (const requested of requestedIdsCopy) {
-				missing.push(requested);
 			}
 
 			// Sort discovered by score descending
@@ -343,27 +434,50 @@ ${SKILL_DELIMITER_END}`;
  * Extracts potential skill requests from a user message.
  *
  * Looks for patterns like:
- * - "use the X skill"
- * - "with the X skill"
  * - "@skill-name"
+ * - "use the X skill", "with the X skill"
+ * - "use a skill X", "carregue a skill X" (pt-BR)
+ *
+ * Names are normalized before returning. Articles are not names: measured
+ * before this change, "use a skill teste" returned "a" and "use a skill Skill
+ * de Teste" returned "a-skill", both reported as missing skills. Portuguese
+ * was not recognized at all — only the English "X skill" form and "@id".
  */
 export function extractSkillRequests(message: string): string[] {
 	const requests: string[] = [];
+	const add = (raw: string | undefined): void => {
+		if (raw === undefined) {
+			return;
+		}
+		const name = normalizeSkillName(clausePrefix(raw));
+		// An article captured by the "X skill" form ("use a skill teste")
+		// canonicalizes to nothing; it is not a skill name.
+		if (name.length === 0 || META_SKILL_WORDS.has(name) || canonicalSkillName(name).length === 0) {
+			return;
+		}
+		requests.push(name);
+	};
 
-	// Match @skill-name pattern
-	const atPattern = /@([a-zA-Z0-9_-]+)/g;
-	let match;
-	while ((match = atPattern.exec(message)) !== null) {
-		requests.push(match[1]);
+	// "@skill-name"
+	for (const match of message.matchAll(/@([\p{L}\p{N}_-]+)/gu)) {
+		add(match[1]);
 	}
 
-	// Match "use/with the X skill" pattern
-	// Matches: "use the code review skill", "use code-review skill", "with the testing skill"
-	const skillPattern = /(?:use|using|with|load)\s+(?:the\s+)?([a-zA-Z0-9_-]+(?:\s+[a-zA-Z0-9_-]+)?)\s+skill/gi;
-	while ((match = skillPattern.exec(message)) !== null) {
-		// Normalize multi-word skill names to kebab-case
-		const skillName = match[1].toLowerCase().replace(/\s+/g, '-');
-		requests.push(skillName);
+	// "use the code review skill" — the name comes before the word "skill".
+	// Up to three words, so a title like "code review" survives.
+	const nameBefore =
+		/(?:use|using|with|load|usar|usando|carregue|carregar|ative|ativar|abra|abrir|leia|ler)\s+(?:the\s+|a\s+|an\s+|o\s+|os\s+|as\s+)?([\p{L}\p{N}_-]+(?:\s+[\p{L}\p{N}_-]+){0,2}?)\s+skill\b/giu;
+	for (const match of message.matchAll(nameBefore)) {
+		add(match[1]);
+	}
+
+	// "use a skill teste", "carregue a skill de teste" — the name comes after
+	// the word "skill". Three words keep "Skill de Teste"; a clause boundary
+	// ("teste para…") is cut before canonicalization.
+	const nameAfter =
+		/(?:use|using|with|load|usar|usando|carregue|carregar|ative|ativar|abra|abrir|leia|ler)\s+(?:the\s+|a\s+|an\s+|o\s+|os\s+|as\s+)?skill\s+(?:de\s+|do\s+|da\s+|the\s+|a\s+|an\s+|o\s+)?([\p{L}\p{N}_-]+(?:\s+[\p{L}\p{N}_-]+){0,2})/giu;
+	for (const match of message.matchAll(nameAfter)) {
+		add(match[1]);
 	}
 
 	return [...new Set(requests)];
