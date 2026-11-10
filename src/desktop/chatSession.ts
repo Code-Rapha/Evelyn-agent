@@ -2515,10 +2515,21 @@ export class ChatSession {
 	 * A regra de "não pode ser excluída" mora no store, que é quem apaga; aqui
 	 * só se grava a intenção, para a lista e o diálogo fixo poderem se achar.
 	 */
-	async setConversationPinned(conversationId: string, pinned: boolean): Promise<ConversationListItem> {
+async setConversationPinned(conversationId: string, pinned: boolean): Promise<ConversationListItem> {
 		return toConversationListItem(
 			await this.history.setConversationPinned(conversationId, pinned),
 		);
+	}
+
+	/**
+	 * Apaga as mensagens e mantém a conversa — o resgate do histórico.
+	 *
+	 * Um turno que ficou gravado sem resposta envenena os seguintes: o modelo
+	 * lê o transcript inteiro. Limpar é a única saída de dentro do produto, e
+	 * a conversa permanente de preferências é justamente a que não tem lixeira.
+	 */
+	async resetConversation(conversationId: string): Promise<ConversationListItem> {
+		return toConversationListItem(await this.history.resetConversation(conversationId));
 	}
 
 	/**

@@ -2192,6 +2192,10 @@ function registerWindowClosed(listener: () => void): void {
 					input.pinned,
 				);
 			}
+			case 'reset':
+				// Limpa as mensagens e mantém a conversa. Vale para a permanente:
+				// ela não pode ser apagada, mas precisa poder ser reiniciada.
+				return chat.resetConversation(parseConversationId(payload));
 			default:
 				throw new Error(`Unknown conversation action ${JSON.stringify(action)}`);
 		}

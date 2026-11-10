@@ -495,6 +495,21 @@
 								<button id="conversation-new" type="button" class="secondary subtle">
 									+ New
 								</button>
+								<!--
+									O resgate, para a conversa aberta.
+
+									Um histórico que acumulou respostas que nunca
+									chegaram — ou mensagens enviadas duas vezes porque
+									a primeira pareceu ignorada — não tem como ser
+									consertado por dentro: o modelo lê o que está
+									gravado. Limpar devolve a conversa vazia, com o
+									mesmo título, sem apagar o que a pessoa escolheu.
+									Vale também para a conversa permanente de
+									preferências, que não tem lixeira de propósito.
+								-->
+								<button id="conversation-reset" type="button" class="secondary subtle" disabled>
+									Reset
+								</button>
 							</div>
 
 							<ul id="conversation-list" class="conversations"></ul>

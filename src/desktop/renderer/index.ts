@@ -2983,6 +2983,10 @@ function renderConversationHeader(): void {
 	title.readOnly = item === undefined || isBusy();
 	byId<HTMLButtonElement>('conversation-rename').disabled = item === undefined || isBusy();
 	byId<HTMLButtonElement>('conversation-delete').disabled = item === undefined || isBusy();
+	// O reset vale para qualquer conversa, inclusive a permanente: é o único
+	// caminho de dentro do produto para um histórico que ficou envenenado.
+	byId<HTMLButtonElement>('conversation-reset').disabled =
+		item === undefined || isBusy() || item.messageCount === 0;
 
 	byId('conversation-meta').textContent =
 		item === undefined ? '' : `${item.messageCount} messages · ${item.updatedAt.slice(0, 19).replace('T', ' ')}`;
@@ -4197,6 +4201,49 @@ async function deleteConversation(conversationId?: string): Promise<void> {
 }
 
 /**
+ * Limpa as mensagens da conversa aberta e mantém a conversa.
+ *
+ * O resgate para um histórico que ficou envenenado: respostas que nunca
+ * chegaram deixam `user` sem resposta no transcript, e o modelo carrega isso
+ * a cada turno novo. Apagar e recriar funciona, mas seria pedir à pessoa que
+ * descobrisse sozinha que o problema é o histórico — e a conversa permanente
+ * de preferências não tem lixeira, então nem essa saída existe.
+ *
+ * Não apaga a conversa: o título, o provedor, o projeto, o `systemPrompt` e a
+ * marca de permanente ficam. O que a pessoa escolheu continua escolhido.
+ */
+async function resetConversation(): Promise<void> {
+	const bridge = state.bridge;
+	if (bridge === undefined) {
+		return;
+	}
+	const item = currentConversation();
+	if (item === undefined) {
+		return;
+	}
+	// Confirma antes: é irreversível, e "Reset" ao lado de "+ New" é um clique
+	// fácil de errar.
+	const confirmed = await confirmDevAction(
+		item.messageCount === 1
+			? `Limpar a única mensagem de "${item.title}"? A conversa continua, vazia.`
+			: `Limpar as ${item.messageCount} mensagens de "${item.title}"? A conversa continua, vazia. Isso não tem desfazer.`,
+	);
+	if (!confirmed) {
+		return;
+	}
+	clearError(byId('conversation-error'));
+	try {
+		await bridge.resetConversation(item.id);
+		// Relê o transcript do disco, em vez de esvaziar a tela: é o que o
+		// próximo turno vai ler, e o que aparece tem de ser isso.
+		await refreshConversations();
+		await openConversation(item.id);
+	} catch (error) {
+		report(error, byId('conversation-error'), 'Could not reset the conversation.');
+	}
+}
+
+/**
  * Pede confirmação para excluir uma conversa (R4F).
  *
  * Um diálogo da própria página, e não `window.confirm`: no Electron o nativo
@@ -4920,7 +4967,9 @@ byId<HTMLSelectElement>('access-policy-capabilities').addEventListener('change',
 
 	byId<HTMLButtonElement>('conversation-new').addEventListener('click', () => void newConversation());
 	byId<HTMLButtonElement>('conversation-rename').addEventListener('click', () => void renameConversation());
-	byId<HTMLButtonElement>('conversation-delete').addEventListener('click', () => void deleteConversation());	byId<HTMLButtonElement>('system-save').addEventListener('click', () => void saveSystemPrompt());
+	byId<HTMLButtonElement>('conversation-delete').addEventListener('click', () => void deleteConversation());
+	byId<HTMLButtonElement>('conversation-reset').addEventListener('click', () => void resetConversation());
+	byId<HTMLButtonElement>('system-save').addEventListener('click', () => void saveSystemPrompt());
 	byId<HTMLButtonElement>('system-clear').addEventListener('click', () => {
 		byId<HTMLTextAreaElement>('system-prompt').value = '';
 		void saveSystemPrompt();

@@ -1606,6 +1606,15 @@ export interface SeshyinaBridge {
 	 */
 	pinConversation(conversationId: string, pinned: boolean): Promise<ConversationListItem>;
 	/**
+	 * Limpa as mensagens e mantém a conversa.
+	 *
+	 * O resgate de um histórico que acumulou respostas que nunca chegaram: o
+	 * modelo lê o transcript inteiro, e cada turno novo carrega o anterior. Vale
+	 * também para a permanente de preferências, que não pode ser apagada.
+	 * A marca de permanente, o título e o `systemPrompt` ficam.
+	 */
+	resetConversation(conversationId: string): Promise<ConversationListItem>;
+	/**
 	 * O que está gravado hoje como preferência de modelo.
 	 *
 	 * `undefined` quando nada foi registrado. É o texto que o motor consulta a

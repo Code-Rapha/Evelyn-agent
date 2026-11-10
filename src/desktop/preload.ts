@@ -1020,6 +1020,16 @@ const bridge: SeshyinaBridge = Object.freeze({
 		}
 	},
 
+	async resetConversation(conversationId: string) {
+		try {
+			return parseConversationListItem(
+				await ipcRenderer.invoke(CONVERSATION_CHANNEL, 'reset', parseConversationId(conversationId)),
+			);
+		} catch (error) {
+			rethrow(error);
+		}
+	},
+
 	async recordModelGuidance(conversationId: string, text: string) {
 		try {
 			return parseModelGuidance(

@@ -221,6 +221,12 @@ export interface DataStore extends ModelCatalogPort, ConsumptionLedgerPort, Spen
 	 */
 	setConversationPinned(conversationId: string, pinned: boolean): Promise<ConversationRecord>;
 	/**
+	 * Apaga as mensagens e mantém a conversa (título, vínculos e a marca de
+	 * permanente). O resgate de um histórico que acumulou lixo — o caso da
+	 * conversa permanente de preferências, que não tem lixeira.
+	 */
+	resetConversation(conversationId: string): Promise<ConversationRecord>;
+	/**
 	 * Deletes a conversation, saying **which** absence it found (R4M).
 	 *
 	 * A boolean could not tell "already gone" (the state the caller wanted)

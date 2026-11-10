@@ -649,6 +649,53 @@ export class FileDataStore implements DataStore, ProviderModelCatalogPort {
 	}
 
 	/**
+	 * Apaga as mensagens e mantém a conversa.
+	 *
+	 * ## Por que existe
+	 *
+	 * Um histórico que acumulou respostas que nunca chegaram — ou mensagens
+	 * enviadas duas vezes porque a primeira pareceu ignorada — não tem
+	 * conserto por dentro: o modelo lê o que está gravado, e cada turno novo
+	 * carrega mais daquele lixo. Medido: "Preferências de modelo" chegou a 56
+	 * mensagens em duas semanas, quatro delas seguidas do usuário e sem
+	 * resposta.
+	 *
+	 * A conversa **permanente** é o caso que mais precisa disto: ela não tem
+	 * lixeira de propósito, e sem um reset o único caminho era editar o disco
+	 * à mão.
+	 *
+	 * O que fica: o id, o título, o provedor, o projeto e a marca de
+	 * permanente. O que sai: as mensagens. `seq` recomeça em 0, como numa
+	 * conversa nova — o modelo não deve ver buracos na numeração.
+	 *
+	 * O `systemPrompt` da conversa é uma mensagem de papel `system` e sai junto,
+	 * então ele é **restaurado depois**, com o mesmo texto. Um diálogo de
+	 * preferências que perdesse a instrução de sistema no reset passaria a
+	 * responder como um chat comum.
+	 */
+	async resetConversation(conversationId: string): Promise<ConversationRecord> {
+		return this.queueWrite(async () => {
+			const existing = await this.readConversationFile(conversationId);
+			if (existing === undefined) {
+				throw new StorageError(`No conversation with id "${conversationId}"`, {
+					details: { conversationId },
+				});
+			}
+			const system = existing.messages.find((message) => message.role === 'system');
+			const reset: ConversationFile = {
+				...existing,
+				updatedAt: this.now(),
+				messages:
+					system === undefined
+						? []
+						: [{ ...system, id: this.generateId(), seq: 0, createdAt: this.now() }],
+			};
+			await this.saveConversationFile(reset);
+			return toRecord(reset);
+		});
+	}
+
+	/**
 	 * Replaces the conversation's single system message.
 	 *
 	 * Runs under the write lock and rewrites the whole transcript, so the

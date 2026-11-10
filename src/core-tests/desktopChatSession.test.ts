@@ -1483,6 +1483,57 @@ suite('Desktop: chat session', () => {
 		);
 	});
 
+	// O resgate do histórico envenenado.
+	//
+	// Medido: "Preferências de modelo" acumulou 56 mensagens em duas semanas,
+	// quatro delas seguidas do usuário e sem resposta. O modelo lê o transcript
+	// inteiro a cada turno, então o lixo não sai sozinho — e a conversa
+	// permanente não tem lixeira, o que deixava a edição do disco como única
+	// saída. O reset limpa as mensagens e mantém o que a pessoa escolheu.
+	test('o reset limpa as mensagens e mantém título, vínculos e a marca de permanente', async () => {
+		const chat = await readySession(scriptedFetch([]).fetchImpl);
+		const dialogue = await chat.createConversation({
+			providerId: LOCAL_ID,
+			title: 'Preferências de modelo',
+			systemPrompt: 'Você configura as preferências de modelo.',
+		});
+		await chat.setConversationPinned(dialogue.summary.id, true);
+
+		// Um histórico com o defeito: mensagens do usuário sem resposta.
+		const store = new FileDataStore({ rootPath: join(root, 'data') });
+		await store.appendMessages(dialogue.summary.id, [
+			{ role: 'user', content: 'quais sao os modelos disponiveis?' },
+			{ role: 'user', content: 'ola' },
+			{ role: 'user', content: 'ola' },
+		]);
+		assert.ok((await chat.listConversations())[0]?.messageCount === 3);
+
+		const reset = await chat.resetConversation(dialogue.summary.id);
+
+		assert.equal(reset.title, 'Preferências de modelo', 'o título fica');
+		assert.equal(reset.pinned, true, 'a marca de permanente fica');
+		assert.equal(reset.providerId, LOCAL_ID, 'o provedor fica');
+
+		// A instrução de sistema é uma mensagem `system`; ela não pode sumir
+		// junto, ou o diálogo passa a responder como um chat comum.
+		const stored = await new FileDataStore({ rootPath: join(root, 'data') }).getConversation(
+			dialogue.summary.id,
+		);
+		const roles = (stored?.messages ?? []).map((message) => message.role);
+		assert.deepEqual(roles, ['system'], 'só a instrução de sistema sobrou');
+		const system = stored?.messages[0];
+		assert.equal(
+			system?.role === 'system' ? system.content : '',
+			'Você configura as preferências de modelo.',
+		);
+		// `seq` recomeça: o modelo não deve ver buracos na numeração.
+		assert.equal(stored?.messages[0]?.seq, 0);
+
+		// A permanente continua recusando a exclusão — o reset não a tornou
+		// uma conversa comum.
+		await assert.rejects(() => chat.deleteConversation(dialogue.summary.id), /permanente/);
+	});
+
 	test('uma conversa permanente recusa a exclusão e sobrevive ao relê', async () => {
 		const chat = await readySession(scriptedFetch([]).fetchImpl);
 		const dialogue = await chat.createConversation({
