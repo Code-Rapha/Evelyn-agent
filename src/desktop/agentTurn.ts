@@ -294,17 +294,33 @@ export async function runAgentTurn(
 		});
 	}
 
-	// Inject Evelyn Agent identity as the first system message if not already present.
-	// This ensures the agent knows who it is on every turn, regardless of the
-	// conversation's own system prompt (which the user controls).
+	// A identidade da Evelyn entra **dentro** do prompt da conversa, não como
+	// uma segunda mensagem `system`.
+	//
+	// Medido, com o River e o `Qwen/Qwen3.8-27B-FP8`: duas mensagens `system`
+	// recebem `invalid_request` — "Check the model's supported parameters and
+	// input limits". Uma só passa. O app enviava sempre duas quando a conversa
+	// tinha prompt próprio (a identidade + o prompt), então **toda** conversa
+	// com `systemPrompt` — o diálogo de preferências de modelo é a que existe —
+	// era recusada, e a recusa chegava como um evento de erro no stream.
+	//
+	// Juntar as duas numa só preserva o que cada uma dizia: a identidade
+	// primeiro, o prompt da conversa depois, separados por uma linha. É também
+	// o formato que qualquer servidor compatível aceita.
 	if (!hasSeshyinaIdentity(messages)) {
-		const identityMessage = createSeshyinaAgentSystemMessage();
-		// Insert at the beginning, before any existing system prompt
+		const identity = createSeshyinaAgentSystemMessage();
 		const existingSystemIndex = messages.findIndex((m) => m.role === 'system');
 		if (existingSystemIndex >= 0) {
-			messages.splice(existingSystemIndex, 0, identityMessage);
+			const existing = messages[existingSystemIndex];
+			messages[existingSystemIndex] = {
+				...existing,
+				content:
+					existing.content.trim().length === 0
+						? identity.content
+						: `${identity.content}\n\n---\n\n${existing.content}`,
+			};
 		} else {
-			messages.unshift(identityMessage);
+			messages.unshift(identity);
 		}
 	}
 
@@ -567,11 +583,41 @@ export async function runAgentTurn(
 	await closeRound();
 	hooks.release();
 
+	// A turn that said nothing is not an answer.
+	//
+	// Measured: `Qwen/Qwen3.8-27B-FP8` with tools declared spent 2 333
+	// characters of reasoning and emitted no text and no tool call. The turn
+	// was reported `done`/`success`, `closeRound` stored nothing (no prose, no
+	// calls), and the person watched a chat that never answered — twice, with
+	// the second message identical because the first looked ignored. The same
+	// prompt without tools answered 1 581 characters of reasoning and 200 of
+	// prose, so the model was not broken; the turn was simply empty and said
+	// otherwise.
+	//
+	// Saying it plainly is the honest outcome: the person learns that the
+	// model produced nothing and can pick another one, instead of waiting.
+	//
+	// A turn that ended because someone stopped it, or because a budget ran
+	// out, is not this case: those have their own `completion` value and the
+	// `done` below reports it. Only a turn the runtime considers **completed**
+	// and that produced nothing is the silent one.
+	const completion = hooks.runtime.completion === 'running' ? 'completed' : hooks.runtime.completion;
+	if (completion === 'completed' && totalText.trim().length === 0 && toolCallCount === 0) {
+		sink({
+			type: 'error',
+			turnId,
+			message:
+				'O modelo encerrou o turno sem responder e sem usar nenhuma ferramenta. ' +
+				'Não há resposta para mostrar. Tente de novo ou escolha outro modelo.',
+		});
+		return;
+	}
+
 	sink({
 		type: 'done',
 		turnId,
 		content: totalText,
-		reason: hooks.runtime.completion === 'running' ? 'completed' : hooks.runtime.completion,
+		reason: completion,
 		toolCalls: toolCallCount,
 	});
 }
@@ -685,26 +731,29 @@ async function discoverSkills(
 			return { messages, loadedSkillIds: [] };
 		}
 
-		// Inject as system message at the beginning, after any existing system prompt
-		const skillSystemMessage: ChatMessage = {
-			role: 'system',
-			content: skillMessage,
-		};
-
-		// Find where to insert: after existing system message, or at the beginning
+		// As instruções de skill entram **na** mensagem `system` que já existe,
+		// não numa segunda.
+		//
+		// Medido: o River, com o `Qwen/Qwen3.8-27B-FP8`, recusa qualquer
+		// requisição com mais de uma mensagem `system` — `invalid_request`. Esta
+		// injeção criava a segunda sempre que uma skill era carregada, então o
+		// turno falhava só depois que a descoberta começava a achar skill: a
+		// mesma conversa que respondia passava a não responder.
 		const existingSystemIndex = messages.findIndex((m) => m.role === 'system');
 		let injectedMessages: ChatMessage[];
 
 		if (existingSystemIndex >= 0) {
-			// Insert after the existing system message
-			injectedMessages = [
-				...messages.slice(0, existingSystemIndex + 1),
-				skillSystemMessage,
-				...messages.slice(existingSystemIndex + 1),
-			];
+			const existing = messages[existingSystemIndex];
+			injectedMessages = [...messages];
+			injectedMessages[existingSystemIndex] = {
+				...existing,
+				content:
+					existing.content.trim().length === 0
+						? skillMessage
+						: `${existing.content}\n\n${skillMessage}`,
+			};
 		} else {
-			// No system message, insert at the beginning
-			injectedMessages = [skillSystemMessage, ...messages];
+			injectedMessages = [{ role: 'system', content: skillMessage }, ...messages];
 		}
 
 		return {

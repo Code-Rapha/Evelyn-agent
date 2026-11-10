@@ -1571,9 +1571,14 @@ suite('Desktop: chat session', () => {
 		const body = JSON.parse(calls[0].body ?? '{}') as {
 			messages: { role: string; content: string }[];
 		};
+		// Uma **só** mensagem `system`: a identidade e o prompt da conversa
+		// juntos. Duas recebem `invalid_request` em provedores como o River —
+		// medido com o Qwen: a conversa com prompt próprio nunca respondia.
 		assert.deepStrictEqual(body.messages, [
-			{ role: 'system', content: SESHYINA_AGENT_IDENTITY },
-			{ role: 'system', content: 'you are a terse assistant' },
+			{
+				role: 'system',
+				content: `${SESHYINA_AGENT_IDENTITY}\n\n---\n\nyou are a terse assistant`,
+			},
 			{ role: 'user', content: 'hi' },
 		]);
 	});
@@ -1615,17 +1620,22 @@ suite('Desktop: chat session', () => {
 		const secondBody = JSON.parse(bodies[1]) as {
 			messages: { role: string; content: string }[];
 		};
-		// The identity leads, then the prompt, then the whole prior conversation,
-		// then the new turn.
+		// A identidade e o prompt são **uma** mensagem, e ela vem antes de todo
+		// o histórico. Duas mensagens `system` recebem `invalid_request` em
+		// provedores como o River (medido com o Qwen), então a junção é o que
+		// faz um prompt adicionado depois chegar ao modelo.
 		assert.deepStrictEqual(secondBody.messages.map((message) => message.role), [
-			'system',
 			'system',
 			'user',
 			'assistant',
 			'user',
 		]);
-		assert.strictEqual(secondBody.messages[0].content, SESHYINA_AGENT_IDENTITY);
-		assert.strictEqual(secondBody.messages[1].content, 'added later');
+		assert.match(secondBody.messages[0]?.content ?? '', /added later/);
+		// Uma mensagem só: a identidade e o prompt juntos.
+		assert.strictEqual(
+			secondBody.messages[0].content,
+			`${SESHYINA_AGENT_IDENTITY}\n\n---\n\nadded later`,
+		);
 	});
 
 	test('a prompt belongs to one conversation and never leaks into another', async () => {

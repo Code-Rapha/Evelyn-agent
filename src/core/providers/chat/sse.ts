@@ -216,6 +216,39 @@ export function parseChatChunk(payload: string): ChatCompletionChunk | undefined
 		return undefined;
 	}
 
+	// Um erro **dentro** do stream não é um evento vazio.
+	//
+	// Medido: o River devolveu HTTP 200 com `{"error":{"message":"Invalid
+	// inference request…","type":"invalid_request_error"}}` como **primeiro
+	// evento** do stream. O corpo não tem `choices`, então a leitura abaixo
+	// devolvia `undefined` — o mesmo que um keepalive —, o stream terminava
+	// sem erro nem texto, e o runtime concluía `answered` com a resposta vazia.
+	// A pessoa via um "ola" que nunca foi respondido, com o turno marcado como
+	// sucesso.
+	//
+	// O erro sobe como exceção e o `sseStream` o transforma num evento
+	// `Error`, que é o que a interface sabe mostrar.
+	const failure = (parsed as { error?: unknown }).error;
+	if (typeof failure === 'object' && failure !== null) {
+		const detail = failure as { message?: unknown; type?: unknown; code?: unknown };
+		const parts: string[] = [];
+		if (typeof detail.message === 'string' && detail.message.length > 0) {
+			parts.push(detail.message);
+		}
+		if (typeof detail.type === 'string' && detail.type.length > 0) {
+			parts.push(`(${detail.type})`);
+		}
+		const code = detail.code;
+		if (typeof code === 'string' && code.length > 0) {
+			parts.push(`[${code}]`);
+		}
+		throw new Error(
+			parts.length > 0
+				? `O provedor recusou a requisição: ${parts.join(' ')}`
+				: `O provedor recusou a requisição: ${payload.slice(0, 200)}`,
+		);
+	}
+
 	// Read `usage` before the choices, because the chunk that carries it is the
 	// one with no choices at all: a server asked for streamed usage answers the
 	// final event as `{"choices":[],"usage":{…}}`. Returning early on empty
