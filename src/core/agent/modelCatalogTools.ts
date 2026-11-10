@@ -376,7 +376,15 @@ const SAVE_RESEARCH_SPEC: ToolSpec = {
 			query: { type: 'string', description: 'The query the research used' },
 			answer: {
 				type: 'string',
-				description: 'The raw research answer, exactly as research_model returned it',
+				description:
+					'The research answer, in the line format research_model returns. One field per line: ' +
+					'`campo | nivel | valor | fonte | citação`. campos: context, max-output, tools, ' +
+					'structured-output, reasoning, price-input, price-output, price-unit, price-currency, ' +
+					'access, notes. nivel: provider (the vendor said it), secondary (a third party said it) or ' +
+					'estimated. fonte: the https URL the value was read from — a line without a real source is ' +
+					'not saved. If research_model could not read the page (a JS-rendered pricing table, for ' +
+					'example), you may write the lines yourself from a page you actually opened: the source is ' +
+					'that page, and the value is what it says.',
 			},
 			fields: {
 				type: 'array',

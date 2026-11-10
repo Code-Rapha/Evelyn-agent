@@ -7,6 +7,12 @@ node_modules
 # Stray desktop bundle from an esbuild --production run with the wrong outfile.
 /main.js
 
+# Arquivos que o `run_command` deixa no repositório: o `curl` usado para ler
+# uma API escreve um arquivo de cookies quando o destino não é dado com `-o`,
+# e o nome é o limite do `head`. Não são do projeto e não podem entrar no
+# commit por acidente.
+/20000
+
 # Trava do modo DEV entre processos (criada e removida durante a operação).
 # Ancorada à raiz e também em qualquer subdiretório: o DEV pode apontar para
 # outro checkout dentro deste, e a trava nasce na raiz **daquele** repositório.
