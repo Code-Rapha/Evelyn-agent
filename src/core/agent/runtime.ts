@@ -524,6 +524,10 @@ export class ConversationRuntime {
 					// The transcript this turn already produced, for a tool that
 					// has to reason about it instead of about one argument.
 					...(this.turnTurns.length > 0 ? { conversationTurns: this.turnTurns } : {}),
+					// The tool IDs registered for this turn, so a tool that
+					// proposes new tools speaks in IDs the product actually has
+					// instead of a list kept in step somewhere else.
+					availableToolIds: this.tools.ids(),
 					// Passed through so a blocking tool can stop when the user does.
 					...(this.turnSignal !== undefined ? { signal: this.turnSignal } : {}),
 				});

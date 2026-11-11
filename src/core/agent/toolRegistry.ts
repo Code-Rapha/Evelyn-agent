@@ -75,6 +75,18 @@ export class ToolRegistry {
 		return [...this.tools.keys()].sort();
 	}
 
+	/**
+	 * The registered tool IDs, sorted.
+	 *
+	 * Distinct from `names()`: the id is what a skill declares in
+	 * `requiredTools` (`fs.read`, `skill.read`) and the name is what the model
+	 * calls (`read_file`, `read_skill`). A tool that reports what the product
+	 * can do needs the IDs, because that is the vocabulary the answer is in.
+	 */
+	ids(): readonly string[] {
+		return [...new Set([...this.tools.values()].map((tool) => tool.descriptor.id))].sort();
+	}
+
 	/** Tool descriptions for the model, in registration-name order. */
 	listSpecs(): readonly ToolSpec[] {
 		return this.names().map((name) => this.specs.get(name) as ToolSpec);

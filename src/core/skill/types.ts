@@ -237,6 +237,15 @@ export interface SkillOpportunityInput {
 	readonly maxTurns?: number;
 	/** Existing skill IDs to avoid duplicates. */
 	readonly existingSkillIds?: readonly string[];
+	/**
+	 * The existing skills in full, when the caller has them.
+	 *
+	 * `existingSkillIds` suppresses a proposal only when the ids match exactly.
+	 * A skill whose id differs but whose title is the same — or which shares
+	 * more than half of its tags — is the same skill under another name, and
+	 * without the full records the duplicate check had nothing to compare.
+	 */
+	readonly existingSkills?: readonly SkillEntry[];
 	/** Tool IDs available in the current session. */
 	readonly availableTools?: readonly string[];
 }

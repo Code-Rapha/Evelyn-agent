@@ -23,6 +23,7 @@ import { createSkillTools } from '../core/agent/skillTools';
 import { ConversationRuntime } from '../core/agent/runtime';
 import { ToolRegistry } from '../core/agent/toolRegistry';
 import { SKILL_TOOL_SPECS } from '../core/agent/skillTools';
+import { MVP_TOOL_SPECS, createReadFileTool, createWriteFileTool } from '../core/agent/mvpTools';
 import type { ToolConversationTurn } from '../core/agent/types';
 import type { ChatProvider, ChatStream, ChatStreamEvent } from '../core/providers/chat/types';
 import type { ConversationTurn, SkillService } from '../core/skill/types';
@@ -150,6 +151,45 @@ suite('Skill opportunity tool', () => {
 		const sequence = proposals.find((proposal) => proposal.id === 'read-skill');
 		assert.ok(sequence !== undefined, 'the repeated tool sequence is proposed');
 		assert.deepStrictEqual(sequence!.requiredTools, ['skill.read']);
+	});
+
+	test('the catalog from the registry speaks the same ids as the proposal', async () => {
+		// A registry reports each tool's descriptor id. For the filesystem
+		// family that id is the call name (`read_file`), while a skill declares
+		// `fs.read`. Handing `ids()` straight to the analysis as the catalog
+		// therefore filtered every filesystem proposal out, and the tool
+		// answered "no opportunities" for a conversation that had just used
+		// `read_file` twice. The two vocabularies are bridged in one table.
+		const registry = new ToolRegistry();
+		for (const tool of [createReadFileTool(), createWriteFileTool()]) {
+			const spec = MVP_TOOL_SPECS.find((candidate) => candidate.name === tool.descriptor.name);
+			assert.ok(spec !== undefined, `no spec for ${tool.descriptor.name}`);
+			registry.register(tool, spec!);
+		}
+
+		const result = await analyzeTool().execute(
+			{},
+			{
+				sessionId: 'test',
+				conversationTurns: REPEATED_INTENT_TURNS,
+				availableToolIds: registry.ids(),
+			},
+		);
+
+		assert.strictEqual(result.ok, true);
+		const proposals = (
+			result.output as { proposals: { id: string; requiredTools: string[] }[] }
+		).proposals;
+		assert.ok(
+			proposals.length > 0,
+			'the real registry still yields a proposal, instead of emptying the catalog',
+		);
+		const repeated = proposals.find((proposal) => proposal.id === 'revisar');
+		assert.ok(repeated !== undefined, 'the repeated intent is proposed');
+		assert.ok(
+			repeated!.requiredTools.includes('fs.read'),
+			'the proposal names the skill id, not the call name the registry reports',
+		);
 	});
 
 	test('an existing skill id suppresses its proposal', async () => {

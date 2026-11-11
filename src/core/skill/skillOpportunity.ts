@@ -17,6 +17,7 @@ import type {
 	ConversationTurn,
 	SkillEntry,
 } from './types';
+import { skillToolId } from './toolIds';
 
 /** Default limits to keep analysis fast and token-cheap. */
 const DEFAULT_MAX_TURNS = 10;
@@ -74,10 +75,20 @@ function extractToolSequences(turns: readonly ConversationTurn[]): string[][] {
 	return sequences;
 }
 
+/** A recurring sequence, with how many times it was seen. */
+interface RecurringSequence {
+	readonly sequence: readonly string[];
+	readonly observations: number;
+}
+
 /**
  * Finds recurring tool sequences (appearing 2+ times).
+ *
+ * The count travels with the sequence rather than being discarded: it is the
+ * only evidence the caller has, and the confidence of the resulting proposal is
+ * derived from it.
  */
-function findRecurringSequences(sequences: string[][]): string[][] {
+function findRecurringSequences(sequences: string[][]): readonly RecurringSequence[] {
 	const counts = new Map<string, number>();
 	const firstSeen = new Map<string, string[]>();
 
@@ -89,10 +100,11 @@ function findRecurringSequences(sequences: string[][]): string[][] {
 		}
 	}
 
-	const recurring: string[][] = [];
+	const recurring: RecurringSequence[] = [];
 	for (const [key, count] of counts) {
-		if (count >= 2) {
-			recurring.push(firstSeen.get(key)!);
+		const seen = firstSeen.get(key);
+		if (count >= 2 && seen !== undefined) {
+			recurring.push({ sequence: seen, observations: count });
 		}
 	}
 	return recurring;
@@ -147,6 +159,37 @@ function extractUserIntents(turns: readonly ConversationTurn[]): Map<string, num
 }
 
 /**
+ * Confidence from the evidence, rather than a number chosen by feel.
+ *
+ * The two previous values — 0.7 for a sequence, 0.6 for an intent — were
+ * constants: a pattern seen twice and one seen nine times carried the same
+ * confidence, and the field could not be used to rank anything.
+ *
+ * The curve is bounded and monotonic, and it never reaches 1: a heuristic over
+ * a short transcript is not proof, and a number that says otherwise invites the
+ * caller to skip the review this whole service exists to require.
+ *
+ * - 2 observations (the minimum to be proposed at all) → 0.5
+ * - 3 → 0.6
+ * - 5 → 0.7
+ * - 9 or more → 0.85
+ */
+const CONFIDENCE_FLOOR = 0.5;
+const CONFIDENCE_CEILING = 0.85;
+
+function confidenceFrom(observations: number): number {
+	if (!Number.isFinite(observations) || observations <= 0) {
+		return CONFIDENCE_FLOOR;
+	}
+	// `1 - 1/n` puts the value on [0, 1) and rises with each observation;
+	// it is rescaled onto the floor..ceiling band so the first proposal is
+	// not reported as a coin flip and the hundredth is not reported as fact.
+	const raw = 1 - 1 / Math.max(2, observations + 1);
+	const scaled = CONFIDENCE_FLOOR + (CONFIDENCE_CEILING - CONFIDENCE_FLOOR) * (raw / (1 - 1 / 2));
+	return Math.round(Math.min(CONFIDENCE_CEILING, scaled) * 100) / 100;
+}
+
+/**
  * Generates a slug from text.
  */
 function slugify(text: string): string {
@@ -179,38 +222,14 @@ function isDuplicate(
 }
 
 /**
- * Maps raw tool-call names to the skill tool IDs used in proposals.
- */
-// Map common tool names to skill tool IDs
-const toolMap: Record<string, string> = {
-	'read_file': 'fs.read',
-	'write_file': 'fs.write',
-	'modify_file': 'fs.modify',
-	'list_files': 'fs.list',
-	'glob_files': 'fs.glob',
-	'grep_files': 'fs.grep',
-	'run_command': 'terminal.execute',
-	'run_test': 'test.run',
-	'git_commit': 'git.commit',
-	'git_status': 'git.status',
-	'create_memory': 'memory.create',
-	'read_memory': 'memory.read',
-	'write_skill': 'skill.write',
-	'read_skill': 'skill.read',
-	'list_skills': 'skill.list',
-	'delete_skill': 'skill.delete',
-};
-
-/**
  * Infers required tools from a tool sequence.
+ *
+ * The sequence holds call names as the transcript recorded them (`read_file`);
+ * the proposal has to name skill ids (`fs.read`). The bridge lives in
+ * `toolIds`, which the analyzer's catalog uses too, so the two cannot drift.
  */
 function inferToolsFromSequence(sequence: string[]): string[] {
-	const tools = new Set<string>();
-	for (const tool of sequence) {
-		const mapped = toolMap[tool];
-		if (mapped) {tools.add(mapped);}
-	}
-	return [...tools];
+	return [...new Set(sequence.map(skillToolId))];
 }
 
 /**
@@ -218,6 +237,7 @@ function inferToolsFromSequence(sequence: string[]): string[] {
  */
 function proposeFromSequence(
 	sequence: string[],
+	observations: number,
 	turns: readonly ConversationTurn[],
 	availableTools: readonly string[],
 	existingSkills: readonly SkillEntry[],
@@ -264,7 +284,7 @@ function proposeFromSequence(
 			'Geração automática baseada em padrão observado',
 			'Requer validação humana antes do uso em produção',
 		],
-		confidence: 0.7,
+		confidence: confidenceFrom(observations),
 		improvesSkillId,
 	};
 
@@ -277,6 +297,7 @@ function proposeFromSequence(
  */
 function proposeFromIntent(
 	intent: string,
+	observations: number,
 	turns: readonly ConversationTurn[],
 	availableTools: readonly string[],
 	existingSkills: readonly SkillEntry[],
@@ -343,7 +364,7 @@ function proposeFromIntent(
 			'Baseado em padrão de solicitações do usuário',
 			'Requer revisão e validação antes do uso',
 		],
-		confidence: 0.6,
+		confidence: confidenceFrom(observations),
 		improvesSkillId,
 	};
 
@@ -363,10 +384,12 @@ export function createSkillOpportunityService(): SkillOpportunityService {
 				const recentTurns = input.recentTurns.slice(-maxTurns);
 				const availableTools = new Set(input.availableTools ?? []);
 				const existingSkillIds = new Set(input.existingSkillIds ?? []);
-
-				// We don't have full SkillEntry objects here, just IDs
-				// For duplicate checking we'll rely on IDs and basic heuristics
-				const existingSkills: SkillEntry[] = [];
+				// The skills as the caller knows them, when it knows more than the
+				// ids. `existingSkillIds` alone can only suppress a proposal whose
+				// id matches exactly; a skill with a different id but the same
+				// title, or more than half the same tags, is the same skill and
+				// was proposed again on every scan.
+				const existingSkills: readonly SkillEntry[] = input.existingSkills ?? [];
 
 				const proposals: SkillProposal[] = [];
 
@@ -374,8 +397,14 @@ export function createSkillOpportunityService(): SkillOpportunityService {
 				const sequences = extractToolSequences(recentTurns);
 				const recurring = findRecurringSequences(sequences);
 
-				for (const seq of recurring) {
-					const proposal = proposeFromSequence(seq, recentTurns, [...availableTools], existingSkills);
+				for (const seen of recurring) {
+					const proposal = proposeFromSequence(
+						[...seen.sequence],
+						seen.observations,
+						recentTurns,
+						[...availableTools],
+						existingSkills,
+					);
 					if (proposal && !existingSkillIds.has(proposal.id)) {
 						proposals.push(proposal);
 					}
@@ -386,11 +415,16 @@ export function createSkillOpportunityService(): SkillOpportunityService {
 				const frequentIntents = [...intents.entries()]
 					.filter(([, count]) => count >= 2)
 					.sort(([, a], [, b]) => b - a)
-					.slice(0, 3)
-					.map(([intent]) => intent);
+					.slice(0, 3);
 
-				for (const intent of frequentIntents) {
-					const proposal = proposeFromIntent(intent, recentTurns, [...availableTools], existingSkills);
+				for (const [intent, observations] of frequentIntents) {
+					const proposal = proposeFromIntent(
+						intent,
+						observations,
+						recentTurns,
+						[...availableTools],
+						existingSkills,
+					);
 					if (proposal && !existingSkillIds.has(proposal.id)) {
 						// Check against already generated proposals
 						if (!proposals.some((p) => p.id === proposal.id)) {

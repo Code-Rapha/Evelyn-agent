@@ -11,9 +11,10 @@
  */
 import type { AgentTool, ToolDescriptor, ToolExecutionContext, ToolResult } from './types';
 import type { ToolSpec } from './toolRegistry';
-import type { SkillService, SkillEntry, CreateSkillInput, UpdateSkillInput } from '../skill/types';
+import type { SkillService, CreateSkillInput, UpdateSkillInput } from '../skill/types';
 import type { RiskLevel } from '../permissions/types';
 import { createSkillOpportunityService } from '../skill/skillOpportunity';
+import { skillToolIds } from '../skill/toolIds';
 
 /** Tool names. */
 export const READ_SKILL = 'read_skill';
@@ -335,6 +336,33 @@ export function createDeleteSkillTool(skillService: SkillService): AgentTool<Del
 }
 
 /**
+ * The tool IDs assumed when the caller does not say which are registered.
+ *
+ * Only reached when the analysis runs outside a runtime turn, which means a
+ * test or a script. A real turn always supplies `availableToolIds`, because
+ * the registry is right there — so this list can never disagree with the
+ * product during normal use, and the guard is the empty-context case rather
+ * than a second source of truth.
+ */
+const DEFAULT_TOOL_IDS: readonly string[] = [
+	'fs.read',
+	'fs.write',
+	'fs.modify',
+	'fs.list',
+	'terminal.execute',
+	'test.run',
+	'memory.create',
+	'memory.read',
+	'memory.update',
+	'memory.delete',
+	'memory.list',
+	'skill.read',
+	'skill.write',
+	'skill.list',
+	'skill.delete',
+];
+
+/**
  * Creates the analyze_skill_opportunities tool.
  *
  * The analysis needs the conversation, and the conversation is not an
@@ -356,38 +384,6 @@ export function createAnalyzeSkillOpportunitiesTool(
 	};
 	const opportunityService = createSkillOpportunityService();
 
-	/**
-	 * The catalog the proposals are expressed in.
-	 *
-	 * The service maps the tool-call names it observes (`read_file`,
-	 * `run_command`) to these IDs before proposing, so a proposal that names a
-	 * tool the product does not have would be filtered out. These are the same
-	 * IDs a skill's `requiredTools` uses — `fs.read`, not `read_file` — which
-	 * is why the skill tools appear as `skill.read` rather than by their call
-	 * name.
-	 */
-	const availableTools = [
-		'fs.read',
-		'fs.write',
-		'fs.modify',
-		'fs.list',
-		'fs.glob',
-		'fs.grep',
-		'terminal.execute',
-		'test.run',
-		'git.status',
-		'git.commit',
-		'memory.create',
-		'memory.read',
-		'memory.update',
-		'memory.delete',
-		'memory.list',
-		'skill.read',
-		'skill.write',
-		'skill.list',
-		'skill.delete',
-	];
-
 	return {
 		descriptor,
 		async execute(input, context): Promise<ToolResult<AnalyzeSkillOpportunitiesResult>> {
@@ -407,9 +403,31 @@ export function createAnalyzeSkillOpportunitiesTool(
 				}
 				const existingSkillIds = listResult.skills.map((s) => s.id);
 
+				// The tool catalog is what the turn actually registered. The
+				// previous version carried its own list, so a tool added to the
+				// product appeared here only after someone remembered to edit
+				// this file too — and a proposal naming a tool that does exist
+				// was discarded as if it did not.
+				//
+				// The registry reports descriptor ids (`read_file`); the proposal
+				// speaks skill ids (`fs.read`). The bridge is `skillToolIds`, the
+				// same table the analyzer uses on the observed call names, so the
+				// catalog and the proposal cannot end up in two vocabularies.
+				const availableTools =
+					(context.availableToolIds ?? []).length > 0
+						? skillToolIds(context.availableToolIds ?? [])
+						: // Chamado fora de um turno do runtime — um teste, um script —, o
+							// contexto não traz a lista. Aí a análise continua com o que
+							// deve existir num agente completo, e o resultado é o de antes.
+							[...DEFAULT_TOOL_IDS];
+
 				const result = await opportunityService.analyze({
 					recentTurns: turns,
 					existingSkillIds,
+					// The skills in full: without them the duplicate check only
+					// compared ids and proposed the same skill again under a
+					// different name.
+					existingSkills: listResult.skills,
 					availableTools,
 					...(input.maxTurns !== undefined ? { maxTurns: input.maxTurns } : {}),
 					...(input.maxProposals !== undefined ? { maxProposals: input.maxProposals } : {}),

@@ -51,6 +51,16 @@ export interface ToolExecutionContext {
 	readonly sessionId: string;
 	readonly workingDirectory?: string;
 	/**
+	 * The tool IDs registered for this turn, when the host can supply them.
+	 *
+	 * A tool that reasons about what the product can do — the skill-opportunity
+	 * analyzer — has to be told: the Core cannot import the registry that holds
+	 * them without depending on one composition. Absent means "the caller did
+	 * not say", which is reported as such rather than guessed at from a list
+	 * kept in step by hand.
+	 */
+	readonly availableToolIds?: readonly string[];
+	/**
 	 * The transcript up to the moment the tool runs, when the host has one.
 	 *
 	 * A tool that only touches a file ignores it. One that analyzes the
