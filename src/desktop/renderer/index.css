@@ -2204,6 +2204,24 @@ button.subtle {
 	color: var(--failed);
 }
 
+/* The skill a turn loaded: a note about the turn, not a step of the work. */
+.message.skill {
+	align-self: stretch;
+	max-width: none;
+}
+
+.message.skill .bubble {
+	background: transparent;
+	border: 1px solid var(--border);
+	color: var(--muted);
+	font-size: 12px;
+	padding: 4px 10px;
+}
+
+.message.skill .role {
+	color: var(--accent);
+}
+
 .message.failed .bubble {
 	border: 1px solid var(--failed);
 	background: color-mix(in srgb, var(--failed) 10%, transparent);

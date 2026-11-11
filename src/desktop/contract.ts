@@ -1061,6 +1061,23 @@ export interface SkillEvolutionResultView {
 }
 
 /**
+ * A live skill, as the panel lists it.
+ *
+ * The instructions stay out: the list is an index, and sending every skill's
+ * full text to a window that only shows titles would put knowledge on screen
+ * that nobody asked to read.
+ */
+export interface SkillSummaryView {
+	readonly id: string;
+	readonly title: string;
+	readonly description: string;
+	readonly version: string;
+	readonly tags: readonly string[];
+	readonly riskLevel: 'safe' | 'moderate' | 'dangerous';
+	readonly updatedAt: string;
+}
+
+/**
  * A configuração do roteador, como a janela a lê.
  *
  * `configured` diz se o usuário **chegou a escolher** alguma coisa. Sem ele, o
@@ -1520,6 +1537,14 @@ export interface SeshyinaBridge {
 	openSettings(): Promise<boolean>;
 
 	// Skill evolution.
+	/**
+	 * Lists the live skills, without their instructions.
+	 *
+	 * The panel showed only proposals, so a skill that existed and loaded in a
+	 * turn was invisible in the one place that talks about skills. This is a
+	 * read: nothing is changed and nothing is proposed.
+	 */
+	listSkills(): Promise<readonly SkillSummaryView[]>;
 	/**
 	 * Reads the history and reports what looks improvable.
 	 *
@@ -3817,6 +3842,49 @@ export function parseSkillContentDiffView(value: unknown): SkillContentDiffView 
 		instructionsDiff: parseStringArray(instructionsDiff, 'instructionsDiff'),
 		identical,
 	};
+}
+
+/** Narrows what main sent as the live skill index. */
+export function parseSkillSummaryViews(value: unknown): readonly SkillSummaryView[] {
+	if (!Array.isArray(value)) {
+		throw new BridgePayloadError(`expected an array, received ${describe(value)}`);
+	}
+	return value.map((entry) => {
+		if (!isObject(entry)) {
+			throw new BridgePayloadError('each skill must be an object');
+		}
+		const { id, title, description, version, tags, riskLevel, updatedAt } = entry;
+		if (typeof id !== 'string' || id.length === 0) {
+			throw new BridgePayloadError('a skill needs a non-empty id');
+		}
+		if (typeof title !== 'string' || title.length === 0) {
+			throw new BridgePayloadError(`skill "${id}" needs a non-empty title`);
+		}
+		if (typeof description !== 'string') {
+			throw new BridgePayloadError(`skill "${id}" needs a description`);
+		}
+		if (typeof version !== 'string') {
+			throw new BridgePayloadError(`skill "${id}" needs a version`);
+		}
+		if (!Array.isArray(tags) || tags.some((tag) => typeof tag !== 'string')) {
+			throw new BridgePayloadError(`skill "${id}" needs a string array of tags`);
+		}
+		if (riskLevel !== 'safe' && riskLevel !== 'moderate' && riskLevel !== 'dangerous') {
+			throw new BridgePayloadError(`skill "${id}" has an unknown risk level`);
+		}
+		if (typeof updatedAt !== 'string' || updatedAt.length === 0) {
+			throw new BridgePayloadError(`skill "${id}" needs a non-empty updatedAt`);
+		}
+		return {
+			id,
+			title,
+			description,
+			version,
+			tags: tags as string[],
+			riskLevel,
+			updatedAt,
+		};
+	});
 }
 
 /** Narrows what main sent as a list of archived versions. */

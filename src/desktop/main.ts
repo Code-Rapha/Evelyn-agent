@@ -223,6 +223,31 @@ class DesktopCore {
 		return this.mounted.core.scanSkillHistory();
 	}
 
+	/**
+	 * The live skills, as the panel lists them.
+	 *
+	 * Instructions are not included: the panel is an index of what exists, and
+	 * a window that shows titles does not need the full text of every skill.
+	 */
+	async listSkills(): Promise<unknown> {
+		if (this.mounted === undefined) {
+			throw new Error('the data directory is not available');
+		}
+		const result = await this.mounted.core.skillService.listSkills();
+		if (!result.ok) {
+			throw new Error(result.error ?? 'the skills could not be read');
+		}
+		return result.skills.map((skill) => ({
+			id: skill.id,
+			title: skill.title,
+			description: skill.description,
+			version: skill.version,
+			tags: skill.tags,
+			riskLevel: skill.riskLevel,
+			updatedAt: skill.updatedAt,
+		}));
+	}
+
 	/** The payload the renderer is allowed to see. */
 	status(electronVersion: string): CoreStatus {
 		return parseCoreStatus({
@@ -1379,6 +1404,9 @@ const READ_ACTIONS: Readonly<Record<string, Readonly<Record<string, () => unknow
 	},
 	[SKILL_EVOLUTION_CHANNEL]: {
 		versions: () => [],
+		// A leitura da lista de skills não depende de nenhuma decisão: sem
+		// Core, não há skill neste processo, e a lista vazia é a verdade.
+		skills: () => [],
 	},
 	[PROJECT_CHANNEL]: {
 		list: () => [],
@@ -2016,6 +2044,11 @@ function registerWindowClosed(listener: () => void): void {
 	 */
 	ipcMain.handle(SKILL_EVOLUTION_CHANNEL, async (_event, action: unknown, payload: unknown) => {
 		switch (action) {
+			case 'skills':
+				// A lista do que existe hoje. Leitura pura: não propõe, não
+				// aprova e não escreve. É o que faltava no painel — só as
+				// propostas apareciam, e uma skill viva era invisível.
+				return desktop.listSkills();
 			case 'scan':
 				// Reads and reports. Nothing is stored, no skill is touched, and no
 				// proposal is filed here — filing is the next verb, on purpose.

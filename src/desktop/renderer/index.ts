@@ -56,6 +56,7 @@ import {
 	type SkillProposalStatus,
 	type SkillProposalView,
 	type SkillScanView,
+	type SkillSummaryView,
 } from '../contract';
 import type { DevRunHistoryView } from '../devView';
 import type { DevPanelState } from '../../core/dev/devPanel';
@@ -99,7 +100,7 @@ import {
  * that distinction would make a denied or failed tool look like a success.
  */
 interface UiMessage {
-	role: ChatRole | 'error' | 'toolError';
+	role: ChatRole | 'error' | 'toolError' | 'skill';
 	content: string;
 	/** The tool's name, for a `tool` bubble's label. */
 	toolName?: string;
@@ -3060,7 +3061,9 @@ function renderMessages(): void {
 							? `Tool failed · ${message.toolName ?? 'result'}`
 							: message.role === 'error'
 								? 'Error'
-								: 'Evelyn';
+								: message.role === 'skill'
+									? 'Skills'
+									: 'Evelyn';
 
 		const bubble = document.createElement('div');
 		bubble.className = 'bubble';
@@ -4652,6 +4655,28 @@ function onChatEvent(event: ChatStreamEvent): void {
 				render();
 			}
 			return;
+		case 'skillsLoaded': {
+			// O selo do turno. Antes o evento atravessava o contrato e morria
+			// aqui: a skill era injetada e seguida, mas a tela não dizia que
+			// ela tinha sido carregada — e a única forma de saber era inferir
+			// pelo comportamento do modelo.
+			const parts: string[] = [];
+			if (event.skillIds.length > 0) {
+				parts.push(
+					event.skillIds.length === 1
+						? `Skill carregada: ${event.skillIds[0]}`
+						: `Skills carregadas: ${event.skillIds.join(', ')}`,
+				);
+			}
+			if (event.missing !== undefined && event.missing.length > 0) {
+				parts.push(`pedida(s) e não encontrada(s): ${event.missing.join(', ')}`);
+			}
+			if (parts.length > 0) {
+				state.messages.push({ role: 'skill', content: parts.join(' · ') });
+				render();
+			}
+			return;
+		}
 		case 'modelSelected': {
 			// Show which model was selected for this turn
 			const label = `${event.providerId}:${event.modelId}`;
@@ -6088,7 +6113,7 @@ async function showSkillVersions(
 					return;
 				}
 				showSkillsError(undefined);
-				await refreshSkillProposals(bridge);
+				await refreshSkillsPanel(bridge);
 			} catch (error) {
 				showSkillsError(error instanceof Error ? error.message : String(error));
 			}
@@ -6131,7 +6156,7 @@ async function decideProposal(
 			}
 		}
 		showSkillsError(undefined);
-		await refreshSkillProposals(bridge);
+		await refreshSkillsPanel(bridge);
 	} catch (error) {
 		showSkillsError(error instanceof Error ? error.message : String(error));
 	}
@@ -6287,6 +6312,59 @@ function renderSkillScan(host: HTMLElement, scan: SkillScanView): void {
 	}
 }
 
+/**
+ * Reads the live skills and lists them above the proposals.
+ *
+ * A skill that exists is not a proposal: it is what a turn can load right now.
+ * The panel showed only what might change, so the skills that actually load
+ * were invisible in the one screen that talks about skills.
+ */
+async function refreshInstalledSkills(bridge: SeshyinaBridge): Promise<void> {
+	const list = byId('skills-installed');
+	let skills: readonly SkillSummaryView[];
+	try {
+		skills = await bridge.listSkills();
+	} catch (error) {
+		// The proposal queue owns the panel's error line; a second message for
+		// the same failed read would be noise. The list is cleared so a stale
+		// index cannot pass for the current one.
+		list.replaceChildren();
+		byId('skills-installed-empty').hidden = true;
+		return;
+	}
+
+	list.replaceChildren();
+	byId('skills-installed-empty').hidden = skills.length > 0;
+
+	for (const skill of skills) {
+		const card = document.createElement('div');
+		card.className = 'panel';
+		const heading = document.createElement('p');
+		const title = document.createElement('strong');
+		title.textContent = skill.title;
+		const identity = document.createElement('span');
+		identity.className = 'muted small';
+		identity.textContent = ` ${skill.id} · v${skill.version}`;
+		heading.append(title, identity);
+		const description = document.createElement('p');
+		description.className = 'muted small';
+		description.textContent = skill.description;
+		card.append(heading, description);
+		if (skill.tags.length > 0) {
+			const tags = document.createElement('p');
+			tags.className = 'muted small';
+			tags.textContent = skill.tags.join(' · ');
+			card.append(tags);
+		}
+		list.append(card);
+	}
+}
+
+/** Reloads both halves of the panel: what exists and what is proposed. */
+async function refreshSkillsPanel(bridge: SeshyinaBridge): Promise<void> {
+	await Promise.all([refreshInstalledSkills(bridge), refreshSkillProposals(bridge)]);
+}
+
 /** Reads the queue and renders it. */
 async function refreshSkillProposals(bridge: SeshyinaBridge): Promise<void> {
 	const list = byId('skills-list');
@@ -6331,10 +6409,10 @@ async function refreshSkillProposals(bridge: SeshyinaBridge): Promise<void> {
 
 /** Wires the skills panel. Only meaningful in the settings window. */
 function bindSkillEvolution(bridge: SeshyinaBridge): void {	byId('skills-filter').addEventListener('change', () => {
-		void refreshSkillProposals(bridge);
+		void refreshSkillsPanel(bridge);
 	});
 	byId('skills-refresh').addEventListener('click', () => {
-		void refreshSkillProposals(bridge);
+		void refreshSkillsPanel(bridge);
 	});
 	byId('skills-scan').addEventListener('click', () => {
 		void runSkillScan(bridge);
@@ -7288,7 +7366,7 @@ async function main(): Promise<void> {
 		// Proposals likewise live on disk. Bound before the first read so the
 		// filter is live the moment the section appears.
 		bindSkillEvolution(state.bridge);
-		await refreshSkillProposals(state.bridge);
+		await refreshSkillsPanel(state.bridge);
 		return;
 	}
 

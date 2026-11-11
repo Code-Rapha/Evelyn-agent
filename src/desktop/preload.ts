@@ -111,6 +111,7 @@ import {
 	parseSkillContentDiffView,
 	parseSkillEvolutionResultView,
 	parseSkillVersionViews,
+	parseSkillSummaryViews,
 	parseSaveSkillImprovementInput,
 	parseDecisionReason,
 	type SpendingLimitView,
@@ -817,6 +818,16 @@ const bridge: SeshyinaBridge = Object.freeze({
 	async scanSkillHistory() {
 		try {
 			return parseSkillScanView(await ipcRenderer.invoke(SKILL_EVOLUTION_CHANNEL, 'scan'));
+		} catch (error) {
+			rethrow(error);
+		}
+	},
+
+	async listSkills() {
+		try {
+			return parseSkillSummaryViews(
+				await ipcRenderer.invoke(SKILL_EVOLUTION_CHANNEL, 'skills'),
+			);
 		} catch (error) {
 			rethrow(error);
 		}
