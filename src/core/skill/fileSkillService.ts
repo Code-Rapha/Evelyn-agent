@@ -208,77 +208,184 @@ function buildSkillPath(id: string): string {
 }
 
 /**
+ * The flat-JSON front-matter format, introduced after the hand-rolled one
+ * corrupted skills.
+ *
+ * ## What was wrong with the previous format
+ *
+ * It wrote `tags: ["a", "b"]` and read it back with `split(',')`. A single tag
+ * containing a comma — `"only TS, no JS"` — came back as two tags and, worse,
+ * a constraint written with a comma was silently halved on the next read. The
+ * quoting escaped only `"`, so a value beginning with `-`, `{` or a quote was
+ * re-read as something else entirely.
+ *
+ * ## The format
+ *
+ * One `key: <JSON>` line per field. The value after `key: ` is parsed with
+ * `JSON.parse`, so every string, array and escaping case is the language's
+ * problem rather than this file's. A reader that cannot parse a line keeps the
+ * field's default, which is the same behaviour a missing line already had.
+ *
+ * The Markdown body is unchanged, and the delimiters are unchanged, so a file
+ * written by either version opens in both.
+ */
+const FRONT_MATTER_FIELDS = [
+	'title',
+	'description',
+	'version',
+	'tags',
+	'requiredTools',
+	'riskLevel',
+	'constraints',
+	'createdAt',
+	'updatedAt',
+] as const;
+
+/** Reads one `key: <json>` line. `undefined` when the line is unusable. */
+function readJsonField(line: string): { readonly key: string; readonly value: unknown } | undefined {
+	const colonIndex = line.indexOf(':');
+	if (colonIndex <= 0) {
+		return undefined;
+	}
+	const key = line.slice(0, colonIndex).trim();
+	const raw = line.slice(colonIndex + 1).trim();
+	if (raw.length === 0) {
+		return { key, value: undefined };
+	}
+	try {
+		return { key, value: JSON.parse(raw) };
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Reads a legacy `key: "value"` or `key: [a, b]` line.
+ *
+ * Kept so a skill written before this change still opens. A JSON parse is tried
+ * first — a legacy quoted string like `"Code Review"` is valid JSON and comes
+ * back correct — and only an array or an unterminated string falls through to
+ * the old splitting.
+ */
+function readLegacyField(
+	line: string,
+): { readonly key: string; readonly value: unknown } | undefined {
+	const colonIndex = line.indexOf(':');
+	if (colonIndex <= 0) {
+		return undefined;
+	}
+	const key = line.slice(0, colonIndex).trim();
+	const raw = line.slice(colonIndex + 1).trim();
+	if (raw.length === 0) {
+		return undefined;
+	}
+	const json = readJsonField(line);
+	if (json !== undefined) {
+		return json;
+	}
+	// An array in the old format: `[a, b]`, quoted or not.
+	if (raw.startsWith('[') && raw.endsWith(']')) {
+		const cleaned = raw.slice(1, -1).trim();
+		return {
+			key,
+			value:
+				cleaned.length === 0
+					? []
+					: cleaned.split(',').map((item) => item.trim().replace(/^["']|["']$/g, '')),
+		};
+	}
+	return { key, value: raw.replace(/^["']|["']$/g, '') };
+}
+
+/** The delimiters a front-matter block can open with, in reading order. */
+const FRONT_MATTER_OPENERS = [
+	FRONT_MATTER_DELIMITER,
+	// The YAML document marker some editors add. Accepted so a hand-written
+	// skill copied from a YAML file is not read as one long body.
+	'---yaml',
+] as const;
+
+/**
  * Parses a skill file with front-matter.
+ *
+ * Returns `undefined` only for a file with no readable front-matter at all —
+ * the caller decides whether that is an empty skill or an error. A file whose
+ * block opens but whose fields do not parse keeps the defaults, which is what
+ * a truncated write looks like and is recoverable by rewriting the skill.
  */
 function parseSkillFile(content: string, id: string): SkillEntry {
-	let frontMatter: Record<string, unknown> = {};
+	const frontMatter: Record<string, unknown> = {};
 	let body = content;
 
-	if (content.startsWith(FRONT_MATTER_DELIMITER)) {
-		const endIndex = content.indexOf(FRONT_MATTER_DELIMITER, FRONT_MATTER_DELIMITER.length);
+	const opener = FRONT_MATTER_OPENERS.find((candidate) => content.startsWith(candidate));
+	if (opener !== undefined) {
+		const endIndex = content.indexOf(FRONT_MATTER_DELIMITER, opener.length);
 		if (endIndex !== -1) {
-			const fmText = content.slice(FRONT_MATTER_DELIMITER.length, endIndex).trim();
+			const fmText = content.slice(opener.length, endIndex).trim();
 			body = content.slice(endIndex + FRONT_MATTER_DELIMITER.length).trim();
 
-			// Simple YAML-like parsing for our known fields
 			for (const line of fmText.split('\n')) {
-				const colonIndex = line.indexOf(':');
-				if (colonIndex === -1) {
+				const trimmed = line.trim();
+				if (trimmed.length === 0) {
 					continue;
 				}
-				const field = line.slice(0, colonIndex).trim();
-				const value = line.slice(colonIndex + 1).trim();
-				if (field === 'tags' || field === 'requiredTools' || field === 'constraints') {
-					// Parse array: [item1, item2] or item1, item2
-					const cleaned = value.replace(/^\[|\]$/g, '').trim();
-					if (cleaned.length > 0) {
-						frontMatter[field] = cleaned.split(',').map((t) => t.trim().replace(/^["']|["']$/g, ''));
-					} else {
-						frontMatter[field] = [];
-					}
-				} else {
-					frontMatter[field] = value.replace(/^["']|["']$/g, '');
+				// The modern reader first: it is unambiguous. The legacy one
+				// second, only for lines the modern one rejects.
+				const field = readJsonField(trimmed) ?? readLegacyField(trimmed);
+				if (field !== undefined) {
+					frontMatter[field.key] = field.value;
 				}
 			}
 		}
 	}
 
 	const now = new Date().toISOString();
+	const strings = (value: unknown): readonly string[] =>
+		Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 	return {
 		id,
-		title: (frontMatter.title as string) ?? id,
-		description: (frontMatter.description as string) ?? '',
-		version: (frontMatter.version as string) ?? '1.0.0',
-		tags: (frontMatter.tags as string[]) ?? [],
-		requiredTools: (frontMatter.requiredTools as string[]) ?? [],
+		title: typeof frontMatter['title'] === 'string' ? frontMatter['title'] : id,
+		description: typeof frontMatter['description'] === 'string' ? frontMatter['description'] : '',
+		version: typeof frontMatter['version'] === 'string' ? frontMatter['version'] : '1.0.0',
+		tags: strings(frontMatter['tags']),
+		requiredTools: strings(frontMatter['requiredTools']),
 		instructions: body,
-		riskLevel: (frontMatter.riskLevel as RiskLevel) ?? 'moderate',
-		constraints: (frontMatter.constraints as string[]) ?? [],
-		createdAt: (frontMatter.createdAt as string) ?? now,
-		updatedAt: (frontMatter.updatedAt as string) ?? now,
+		riskLevel: isRiskLevel(frontMatter['riskLevel']) ? frontMatter['riskLevel'] : 'moderate',
+		constraints: strings(frontMatter['constraints']),
+		createdAt: typeof frontMatter['createdAt'] === 'string' ? frontMatter['createdAt'] : now,
+		updatedAt: typeof frontMatter['updatedAt'] === 'string' ? frontMatter['updatedAt'] : now,
 	};
+}
+
+/** Whether a parsed value is one of the three risk levels. */
+function isRiskLevel(value: unknown): value is RiskLevel {
+	return value === 'safe' || value === 'moderate' || value === 'dangerous';
 }
 
 /**
  * Serializes a skill entry to a file with front-matter.
+ *
+ * `JSON.stringify` per field, so a value containing a newline, a comma, a
+ * quote or a leading dash round-trips exactly. The order is fixed because a
+ * file whose fields move on every save is a file nobody can diff.
  */
 function serializeSkillFile(entry: SkillEntry): string {
-	const constraints = entry.constraints ?? [];
-	const lines = [
-		FRONT_MATTER_DELIMITER,
-		`title: "${entry.title.replace(/"/g, '\\"')}"`,
-		`description: "${entry.description.replace(/"/g, '\\"')}"`,
-		`version: "${entry.version}"`,
-		`tags: [${entry.tags.map((t) => `"${t.replace(/"/g, '\\"')}"`).join(', ')}]`,
-		`requiredTools: [${entry.requiredTools.map((t) => `"${t.replace(/"/g, '\\"')}"`).join(', ')}]`,
-		`riskLevel: "${entry.riskLevel}"`,
-		`constraints: [${constraints.map((c) => `"${c.replace(/"/g, '\\"')}"`).join(', ')}]`,
-		`createdAt: "${entry.createdAt}"`,
-		`updatedAt: "${entry.updatedAt}"`,
-		FRONT_MATTER_DELIMITER,
-		'',
-		entry.instructions,
-	];
+	const fields: Record<(typeof FRONT_MATTER_FIELDS)[number], unknown> = {
+		title: entry.title,
+		description: entry.description,
+		version: entry.version,
+		tags: entry.tags,
+		requiredTools: entry.requiredTools,
+		riskLevel: entry.riskLevel,
+		constraints: entry.constraints ?? [],
+		createdAt: entry.createdAt,
+		updatedAt: entry.updatedAt,
+	};
+	const lines: string[] = [FRONT_MATTER_DELIMITER];
+	for (const field of FRONT_MATTER_FIELDS) {
+		lines.push(`${field}: ${JSON.stringify(fields[field])}`);
+	}
+	lines.push(FRONT_MATTER_DELIMITER, '', entry.instructions);
 	return lines.join('\n');
 }
 
