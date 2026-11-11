@@ -197,6 +197,8 @@ const toolMap: Record<string, string> = {
 	'read_memory': 'memory.read',
 	'write_skill': 'skill.write',
 	'read_skill': 'skill.read',
+	'list_skills': 'skill.list',
+	'delete_skill': 'skill.delete',
 };
 
 /**

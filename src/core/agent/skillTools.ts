@@ -336,6 +336,12 @@ export function createDeleteSkillTool(skillService: SkillService): AgentTool<Del
 
 /**
  * Creates the analyze_skill_opportunities tool.
+ *
+ * The analysis needs the conversation, and the conversation is not an
+ * argument: the model cannot be asked to paste the transcript back into a
+ * tool call, and an invented history would make the tool answer "nothing
+ * found" regardless of what happened. The runtime supplies it through
+ * `ToolExecutionContext.conversationTurns`.
  */
 export function createAnalyzeSkillOpportunitiesTool(
 	skillService: SkillService,
@@ -350,44 +356,88 @@ export function createAnalyzeSkillOpportunitiesTool(
 	};
 	const opportunityService = createSkillOpportunityService();
 
+	/**
+	 * The catalog the proposals are expressed in.
+	 *
+	 * The service maps the tool-call names it observes (`read_file`,
+	 * `run_command`) to these IDs before proposing, so a proposal that names a
+	 * tool the product does not have would be filtered out. These are the same
+	 * IDs a skill's `requiredTools` uses — `fs.read`, not `read_file` — which
+	 * is why the skill tools appear as `skill.read` rather than by their call
+	 * name.
+	 */
+	const availableTools = [
+		'fs.read',
+		'fs.write',
+		'fs.modify',
+		'fs.list',
+		'fs.glob',
+		'fs.grep',
+		'terminal.execute',
+		'test.run',
+		'git.status',
+		'git.commit',
+		'memory.create',
+		'memory.read',
+		'memory.update',
+		'memory.delete',
+		'memory.list',
+		'skill.read',
+		'skill.write',
+		'skill.list',
+		'skill.delete',
+	];
+
 	return {
 		descriptor,
 		async execute(input, context): Promise<ToolResult<AnalyzeSkillOpportunitiesResult>> {
 			try {
-				// Get existing skill IDs for deduplication
+				const turns = context.conversationTurns ?? [];
+				if (turns.length === 0) {
+					return {
+						ok: false,
+						error:
+							'No conversation is available to analyze. The tool reads the transcript from the host; call it from a chat turn, not on its own.',
+					};
+				}
+
 				const listResult = await skillService.listSkills();
-				const existingSkillIds = listResult.ok ? listResult.skills.map((s) => s.id) : [];
+				if (!listResult.ok) {
+					return { ok: false, error: listResult.error };
+				}
+				const existingSkillIds = listResult.skills.map((s) => s.id);
 
-				// Get available tools from the registry
-				const availableTools = [
-					'fs.read',
-					'fs.write',
-					'fs.modify',
-					'fs.list',
-					'fs.glob',
-					'fs.grep',
-					'terminal.execute',
-					'test.run',
-					'git.status',
-					'git.commit',
-					'memory.create',
-					'memory.read',
-					'memory.update',
-					'memory.delete',
-					'memory.list',
-					'read_skill',
-					'write_skill',
-					'list_skills',
-					'delete_skill',
-				];
+				const result = await opportunityService.analyze({
+					recentTurns: turns,
+					existingSkillIds,
+					availableTools,
+					...(input.maxTurns !== undefined ? { maxTurns: input.maxTurns } : {}),
+					...(input.maxProposals !== undefined ? { maxProposals: input.maxProposals } : {}),
+				});
+				if (!result.ok) {
+					return { ok: false, error: result.error ?? 'skill opportunity analysis failed' };
+				}
 
-				// The conversation history is not directly accessible from the tool context.
-				// In practice, this tool would be called with conversation turns provided by the model
-				// or via a separate mechanism. For now, we return an empty result with guidance.
 				return {
 					ok: true,
 					output: {
-						proposals: [],
+						proposals: result.proposals.map((proposal) => ({
+							id: proposal.id,
+							title: proposal.title,
+							objective: proposal.objective,
+							justification: proposal.justification,
+							instructions: proposal.instructions,
+							tags: proposal.tags,
+							requiredTools: proposal.requiredTools,
+							riskLevel: proposal.riskLevel,
+							...(proposal.constraints !== undefined
+								? { constraints: proposal.constraints }
+								: {}),
+							confidence: proposal.confidence,
+							...(proposal.improvesSkillId !== undefined
+								? { improvesSkillId: proposal.improvesSkillId }
+								: {}),
+						})),
 					},
 				};
 			} catch (error) {

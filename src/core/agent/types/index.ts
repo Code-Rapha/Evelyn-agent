@@ -33,9 +33,32 @@ export interface ToolDescriptor {
 	readonly description?: string;
 }
 
+/**
+ * One turn of the conversation as a tool sees it.
+ *
+ * A tool that reasons about what the conversation has been doing needs the
+ * words and the tool calls, not the wire format's `tool_call_id` bookkeeping.
+ * `toolResults` is paired by name with the calls of the same assistant turn.
+ */
+export interface ToolConversationTurn {
+	readonly role: 'user' | 'assistant';
+	readonly content: string;
+	readonly toolCalls?: readonly { readonly name: string; readonly arguments: string }[];
+	readonly toolResults?: readonly { readonly name: string; readonly output: string }[];
+}
+
 export interface ToolExecutionContext {
 	readonly sessionId: string;
 	readonly workingDirectory?: string;
+	/**
+	 * The transcript up to the moment the tool runs, when the host has one.
+	 *
+	 * A tool that only touches a file ignores it. One that analyzes the
+	 * conversation — the skill-opportunity tool — cannot do its job without
+	 * it, and inventing an empty history would make it answer "nothing found"
+	 * no matter what the user actually did.
+	 */
+	readonly conversationTurns?: readonly ToolConversationTurn[];
 	/**
 	 * Present when the caller can cancel. A tool that blocks on I/O or on a
 	 * child process should honour it; one that cannot stop early is not wrong,

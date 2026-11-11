@@ -25,7 +25,14 @@ import type {
 	ChatStreamEvent,
 	ToolDefinition,
 } from '../providers/chat/types';
-import type { AgentEvent, AgentSession, AgentTurn, CompletionReason, ToolCall } from './types';
+import type {
+	AgentEvent,
+	AgentSession,
+	AgentTurn,
+	CompletionReason,
+	ToolCall,
+	ToolConversationTurn,
+} from './types';
 import type { ToolRegistry } from './toolRegistry';
 import {
 	isDecision,
@@ -110,6 +117,65 @@ const DEFAULT_TOOL_RETRIES = 2;
 /** Espera base entre novas tentativas de ferramenta, em ms. */
 const DEFAULT_RETRY_DELAY_MS = 250;
 
+/**
+ * Projects the wire transcript into the turns a tool reads.
+ *
+ * `system` messages are dropped: they are the host's instructions, not the
+ * conversation. A `tool` message carries only a `tool_call_id`, so its name is
+ * resolved through the assistant call that announced it; that keeps the
+ * result attached to the turn that caused it instead of floating on its own.
+ */
+function toConversationTurns(history: readonly ChatMessage[]): readonly ToolConversationTurn[] {
+	const turns: {
+		role: 'user' | 'assistant';
+		content: string;
+		toolCalls?: { name: string; arguments: string }[];
+		toolResults?: { name: string; output: string }[];
+	}[] = [];
+	const callNames = new Map<string, string>();
+
+	for (const message of history) {
+		if (message.role === 'user') {
+			turns.push({ role: 'user', content: message.content });
+			continue;
+		}
+		if (message.role === 'assistant') {
+			if (message.toolCalls !== undefined) {
+				for (const call of message.toolCalls) {
+					callNames.set(call.id, call.name);
+				}
+			}
+			turns.push({
+				role: 'assistant',
+				content: message.content,
+				...(message.toolCalls !== undefined && message.toolCalls.length > 0
+					? {
+							toolCalls: message.toolCalls.map((call) => ({
+								name: call.name,
+								arguments: call.arguments,
+							})),
+						}
+					: {}),
+			});
+			continue;
+		}
+		if (message.role === 'tool') {
+			const last = turns[turns.length - 1];
+			if (last === undefined || last.role !== 'assistant') {
+				continue;
+			}
+			const name =
+				message.toolCallId !== undefined ? callNames.get(message.toolCallId) : undefined;
+			last.toolResults = [
+				...(last.toolResults ?? []),
+				{ name: name ?? 'tool', output: message.content },
+			];
+		}
+	}
+
+	return turns;
+}
+
 export class ConversationRuntime {
 	private readonly provider: ChatProvider;
 	private readonly tools: ToolRegistry;
@@ -133,6 +199,14 @@ export class ConversationRuntime {
 	private turnSignal: AbortSignal | undefined;
 	/** Identifies the current turn in permission requests. */
 	private sessionId = 'runtime';
+	/**
+	 * The transcript as it stood before the tool now running.
+	 *
+	 * Rebuilt before each call rather than once per turn: a tool that reads the
+	 * conversation must see the tool calls made earlier in the same turn, and
+	 * the assistant message that asked for the current one.
+	 */
+	private turnTurns: readonly ToolConversationTurn[] = [];
 
 	constructor(private readonly options: AgentRuntimeOptions) {
 		this.provider = options.provider;
@@ -314,6 +388,9 @@ export class ConversationRuntime {
 						yield { type: 'TurnCompleted', reason: 'aborted' };
 						return;
 					}
+					// The conversation as it stands now, including this call's own
+					// announcement and every result from earlier rounds.
+					this.turnTurns = toConversationTurns(history);
 					const outcome = await this.runTool(call, options.signal);
 					for (const pending of this.pendingEvents.splice(0)) {
 						yield pending;
@@ -444,6 +521,9 @@ export class ConversationRuntime {
 					...(this.workingDirectory !== undefined
 						? { workingDirectory: this.workingDirectory }
 						: {}),
+					// The transcript this turn already produced, for a tool that
+					// has to reason about it instead of about one argument.
+					...(this.turnTurns.length > 0 ? { conversationTurns: this.turnTurns } : {}),
 					// Passed through so a blocking tool can stop when the user does.
 					...(this.turnSignal !== undefined ? { signal: this.turnSignal } : {}),
 				});
