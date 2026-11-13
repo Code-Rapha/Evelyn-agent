@@ -850,6 +850,23 @@ export type ChatStreamEvent =
 			readonly missing?: readonly string[];
 	  }
 	| {
+			/**
+			 * Skills created by the automatic learner during this turn.
+			 *
+			 * Emitted before `done`, only when something was created. Each entry
+			 * names the skill, its title, the confidence that justified it and
+			 * the proposal whose `auto` decision is in the history.
+			 */
+			readonly type: 'skillLearned';
+			readonly turnId: string;
+			readonly skills: readonly {
+				readonly id: string;
+				readonly title: string;
+				readonly confidence: number;
+				readonly proposalId: string;
+			}[];
+	  }
+	| {
 			readonly type: 'error';
 			readonly turnId: string;
 			readonly message: string;
@@ -1075,6 +1092,35 @@ export interface SkillSummaryView {
 	readonly tags: readonly string[];
 	readonly riskLevel: 'safe' | 'moderate' | 'dangerous';
 	readonly updatedAt: string;
+}
+
+/** One skill the automatic learner created, as the panel shows it. */
+export interface AutoSkillLearnedView {
+	readonly skillId: string;
+	/** The proposal whose `auto` decision is in the history. */
+	readonly proposalId: string;
+	readonly title: string;
+	/** The conversation whose transcript produced the pattern. */
+	readonly conversationId: string;
+	readonly observations: number;
+	readonly confidence: number;
+	readonly learnedAt: string;
+	readonly tools: readonly string[];
+}
+
+/**
+ * The automatic learner's switch and its receipts.
+ *
+ * The limits travel with the switch so the panel can say what the path is
+ * allowed to do, rather than only whether it is on. `learned` is the audit
+ * trail: each entry names the skill, the conversation and the evidence.
+ */
+export interface AutoSkillStatusView {
+	readonly enabled: boolean;
+	readonly minConfidence: number;
+	readonly maxAutoSkills: number;
+	readonly allowedTools: readonly string[];
+	readonly learned: readonly AutoSkillLearnedView[];
 }
 
 /**
@@ -1545,6 +1591,20 @@ export interface SeshyinaBridge {
 	 * read: nothing is changed and nothing is proposed.
 	 */
 	listSkills(): Promise<readonly SkillSummaryView[]>;
+	/**
+	 * The automatic learner's switch and receipts.
+	 *
+	 * Reads the configuration file. Nothing is created and nothing is changed.
+	 */
+	autoSkillStatus(): Promise<AutoSkillStatusView>;
+	/**
+	 * Turns automatic learning on or off.
+	 *
+	 * The only write this panel makes on this path. Off means the next turn
+	 * creates nothing; skills already learned stay live and are removed through
+	 * the ordinary skill path.
+	 */
+	setAutoSkillsEnabled(enabled: boolean): Promise<AutoSkillStatusView>;
 	/**
 	 * Reads the history and reports what looks improvable.
 	 *
@@ -3561,6 +3621,31 @@ export function parseChatStreamEvent(value: unknown): ChatStreamEvent {
 				...(missing !== undefined && missing.length > 0 ? { missing } : {}),
 			};
 		}
+		case 'skillLearned': {
+			if (!Array.isArray(value.skills)) {
+				throw new BridgePayloadError('a skillLearned event needs a skills array');
+			}
+			const skills = value.skills.map((entry) => {
+				if (!isObject(entry)) {
+					throw new BridgePayloadError('a skillLearned entry must be an object');
+				}
+				const { id, title, confidence, proposalId } = entry;
+				if (typeof id !== 'string' || id.length === 0) {
+					throw new BridgePayloadError('a learned skill needs a non-empty id');
+				}
+				if (typeof title !== 'string' || title.length === 0) {
+					throw new BridgePayloadError('a learned skill needs a non-empty title');
+				}
+				if (typeof confidence !== 'number' || !Number.isFinite(confidence)) {
+					throw new BridgePayloadError('a learned skill needs a numeric confidence');
+				}
+				if (typeof proposalId !== 'string' || proposalId.length === 0) {
+					throw new BridgePayloadError('a learned skill needs the proposal that carried it');
+				}
+				return { id, title, confidence, proposalId };
+			});
+			return { type, turnId, skills };
+		}
 		case 'budgetBlocked': {
 			if (typeof value.providerId !== 'string' || value.providerId.length === 0) {
 				throw new BridgePayloadError('a budgetBlocked event needs a non-empty providerId');
@@ -3885,6 +3970,81 @@ export function parseSkillSummaryViews(value: unknown): readonly SkillSummaryVie
 			updatedAt,
 		};
 	});
+}
+
+/** Narrows what main sent as the automatic learner's status. */
+export function parseAutoSkillStatusView(value: unknown): AutoSkillStatusView {
+	if (!isObject(value)) {
+		throw new BridgePayloadError(`expected an object, received ${describe(value)}`);
+	}
+	const { enabled, minConfidence, maxAutoSkills, allowedTools, learned } = value;
+	if (typeof enabled !== 'boolean') {
+		throw new BridgePayloadError('the automatic learning status needs a boolean enabled');
+	}
+	if (typeof minConfidence !== 'number' || !Number.isFinite(minConfidence)) {
+		throw new BridgePayloadError('the automatic learning status needs a numeric minConfidence');
+	}
+	if (
+		typeof maxAutoSkills !== 'number' ||
+		!Number.isInteger(maxAutoSkills) ||
+		maxAutoSkills < 0
+	) {
+		throw new BridgePayloadError('the automatic learning status needs a non-negative maxAutoSkills');
+	}
+	if (!Array.isArray(allowedTools) || allowedTools.some((tool) => typeof tool !== 'string')) {
+		throw new BridgePayloadError('the automatic learning status needs a string array of allowedTools');
+	}
+	if (!Array.isArray(learned)) {
+		throw new BridgePayloadError('the automatic learning status needs a learned array');
+	}
+	const entries = learned.map((entry) => {
+		if (!isObject(entry)) {
+			throw new BridgePayloadError('each learned skill must be an object');
+		}
+		const { skillId, proposalId, title, conversationId, observations, confidence, learnedAt, tools } =
+			entry;
+		if (typeof skillId !== 'string' || skillId.length === 0) {
+			throw new BridgePayloadError('a learned skill needs a non-empty skillId');
+		}
+		if (typeof proposalId !== 'string' || proposalId.length === 0) {
+			throw new BridgePayloadError(`learned skill "${skillId}" needs a proposalId`);
+		}
+		if (typeof title !== 'string' || title.length === 0) {
+			throw new BridgePayloadError(`learned skill "${skillId}" needs a non-empty title`);
+		}
+		if (typeof conversationId !== 'string' || conversationId.length === 0) {
+			throw new BridgePayloadError(`learned skill "${skillId}" needs a conversationId`);
+		}
+		if (typeof observations !== 'number' || !Number.isFinite(observations) || observations < 0) {
+			throw new BridgePayloadError(`learned skill "${skillId}" needs a non-negative observations`);
+		}
+		if (typeof confidence !== 'number' || !Number.isFinite(confidence)) {
+			throw new BridgePayloadError(`learned skill "${skillId}" needs a numeric confidence`);
+		}
+		if (typeof learnedAt !== 'string' || learnedAt.length === 0) {
+			throw new BridgePayloadError(`learned skill "${skillId}" needs a non-empty learnedAt`);
+		}
+		if (!Array.isArray(tools) || tools.some((tool) => typeof tool !== 'string')) {
+			throw new BridgePayloadError(`learned skill "${skillId}" needs a string array of tools`);
+		}
+		return {
+			skillId,
+			proposalId,
+			title,
+			conversationId,
+			observations,
+			confidence,
+			learnedAt,
+			tools: tools as string[],
+		};
+	});
+	return {
+		enabled,
+		minConfidence,
+		maxAutoSkills,
+		allowedTools: allowedTools as string[],
+		learned: entries,
+	};
 }
 
 /** Narrows what main sent as a list of archived versions. */

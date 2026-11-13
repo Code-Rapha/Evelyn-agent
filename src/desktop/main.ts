@@ -37,6 +37,8 @@ import type { ModelAccessPolicyRecord } from '../core/catalog/policy';
 import type { AccessPolicyView } from './catalogFusion';
 import type { MergedModelView } from './catalogFusion';
 import { createSkillEvolutionService } from '../core/skill/skillEvolutionService';
+import { createAutoSkillService } from '../core/skill/autoSkillService';
+import { toAutoSkillStatusView } from './autoSkillView';
 import { scanForSkillImprovements } from './learningPipeline';
 import { ChatSession } from './chatSession';
 import { DevHost, type DevHostWindow } from './devHost';
@@ -135,6 +137,7 @@ import {
 	parseSkillProposalStatus,
 	type ChatStreamEvent,
 	type CoreStatus,
+	type AutoSkillStatusView,
 	type ServiceControlReply,
 	type ServiceControlState,
 } from './contract';
@@ -165,6 +168,14 @@ class DesktopCore {
 	// accessor that exists only to work around that.
 	readonly chat: ChatSession | undefined;
 	readonly skillEvolution: ReturnType<typeof createSkillEvolutionService> | undefined;
+	/**
+	 * O aprendizado automático, quando a raiz foi montada.
+	 *
+	 * É o mesmo serviço que a sessão de chat chama no fim de um turno; aqui ele
+	 * existe para o painel ler o interruptor e a auditoria e para o interruptor
+	 * ser gravado.
+	 */
+	readonly autoSkills: ReturnType<typeof createAutoSkillService> | undefined;
 	/**
 	 * The histories the scan reads.
 	 *
@@ -208,6 +219,7 @@ class DesktopCore {
 		this.refusalKind = mount.kind;
 		this.chat = this.mounted?.core.chat;
 		this.skillEvolution = this.mounted?.core.skillEvolution;
+		this.autoSkills = this.mounted?.core.autoSkills;
 		this.learningHistory = this.mounted?.core.learningHistory;
 	}
 
@@ -246,6 +258,36 @@ class DesktopCore {
 			riskLevel: skill.riskLevel,
 			updatedAt: skill.updatedAt,
 		}));
+	}
+
+	/**
+	 * O estado do aprendizado automático: o interruptor e a auditoria.
+	 *
+	 * Leitura pura. O painel mostra o que existe, quantas skills este caminho já
+	 * criou e de qual conversa cada uma veio.
+	 */
+	async autoSkillStatus(): Promise<unknown> {
+		if (this.autoSkills === undefined) {
+			throw new Error('the data directory is not available');
+		}
+		return toAutoSkillStatusView(await this.autoSkills.status());
+	}
+
+	/**
+	 * Liga ou desliga o aprendizado automático.
+	 *
+	 * Desligar não apaga o que já foi aprendido — as skills continuam vivas e
+	 * podem ser removidas pelo caminho normal. Desligar significa que o próximo
+	 * turno não cria nada.
+	 */
+	async setAutoSkillsEnabled(enabled: unknown): Promise<unknown> {
+		if (typeof enabled !== 'boolean') {
+			throw new Error('the automatic learning switch expects true or false');
+		}
+		if (this.autoSkills === undefined) {
+			throw new Error('the data directory is not available');
+		}
+		return toAutoSkillStatusView(await this.autoSkills.setEnabled(enabled));
 	}
 
 	/** The payload the renderer is allowed to see. */
@@ -1328,6 +1370,12 @@ function registerUnavailableIpc(): void {
 			if (channel === DISCOVERY_CHANNEL && action === 'discover') {
 				return discoverServiceModels(payload);
 			}
+			// O interruptor do aprendizado automático também vale no conectado:
+			// quem aprende é o serviço, e a escrita vai para lá com a credencial
+			// de painel. Nenhuma skill é tocada — só o booleano.
+			if (channel === SKILL_EVOLUTION_CHANNEL && action === 'auto-set') {
+				return setServiceAutoSkills(payload);
+			}
 			throw new Error(MODE_LOCAL_REQUIRED);
 		});
 	}
@@ -1407,6 +1455,11 @@ const READ_ACTIONS: Readonly<Record<string, Readonly<Record<string, () => unknow
 		// A leitura da lista de skills não depende de nenhuma decisão: sem
 		// Core, não há skill neste processo, e a lista vazia é a verdade.
 		skills: () => [],
+		// O interruptor do aprendizado automático é do **serviço** no modo
+		// conectado: é ele que aprende e é o arquivo dele que o botão muda.
+		// Aqui havia a recusa do stub, e o painel dizia não conseguir ler um
+		// estado que o serviço conhece.
+		'auto-status': () => serviceAutoSkillStatus(),
 	},
 	[PROJECT_CHANNEL]: {
 		list: () => [],
@@ -1566,6 +1619,38 @@ async function serviceProviders(): Promise<readonly ProviderSummary[]> {
 		return [];
 	}
 	return queried.value.providers;
+}
+
+/**
+ * O estado do aprendizado automático **do serviço**.
+ *
+ * No modo conectado o Core é o do serviço, e é ele que sabe se o caminho está
+ * ligado. Sem serviço ativo a leitura falha e a tela diz que não conseguiu ler
+ * — o que é verdade — em vez de mostrar um interruptor inventado.
+ */
+async function serviceAutoSkillStatus(): Promise<AutoSkillStatusView> {
+	const result = await serviceClient().autoSkillStatus();
+	if (!result.ok) {
+		throw new Error(result.message);
+	}
+	return result.value;
+}
+
+/**
+ * Liga ou desliga o aprendizado automático no serviço.
+ *
+ * O corpo é o booleano que o preload envia; a resposta é o estado que ficou
+ * gravado, e é ele que a tela mostra depois do clique.
+ */
+async function setServiceAutoSkills(payload: unknown): Promise<AutoSkillStatusView> {
+	if (typeof payload !== 'boolean') {
+		throw new Error('o interruptor do aprendizado automático espera true ou false');
+	}
+	const result = await serviceClient().setAutoSkillsEnabled(payload);
+	if (!result.ok) {
+		throw new Error(result.message);
+	}
+	return result.value;
 }
 
 /**
@@ -2049,6 +2134,14 @@ function registerWindowClosed(listener: () => void): void {
 				// aprova e não escreve. É o que faltava no painel — só as
 				// propostas apareciam, e uma skill viva era invisível.
 				return desktop.listSkills();
+			case 'auto-status':
+				// O interruptor e a auditoria do aprendizado automático. Lê o
+				// arquivo de configuração; não cria nada.
+				return desktop.autoSkillStatus();
+			case 'auto-set':
+				// A única escrita que o painel faz neste caminho: ligar ou
+				// desligar. As skills já aprendidas não são tocadas.
+				return desktop.setAutoSkillsEnabled(payload);
 			case 'scan':
 				// Reads and reports. Nothing is stored, no skill is touched, and no
 				// proposal is filed here — filing is the next verb, on purpose.

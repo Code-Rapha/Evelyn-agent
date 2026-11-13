@@ -3,7 +3,7 @@
  *
  * ## The rule this file exists to enforce
  *
- * A skill changes because a person said so, in two separate acts:
+ * A skill changes through two separate acts:
  *
  *   propose → (validate) → approve → activate
  *
@@ -17,6 +17,16 @@
  * proposal id; a different proposal has to be approved on its own, and
  * `activateProposal` checks the id it was handed rather than the id it would
  * like.
+ *
+ * ## Who records the decision
+ *
+ * A person, or — when the user has turned automatic learning on — the host on
+ * the user's behalf, with `decidedBy: 'auto'`. The second path is not a bypass:
+ * it goes through the same `createProposal` validation and the same approval
+ * record, and `autoSkill.ts` decides which proposals it may carry. An
+ * improvement to an existing skill never takes that path; only a new skill,
+ * from a repeated read-only procedure, inside the configured cap. The history
+ * says `auto`, so a skill that appeared without a click is still attributable.
  *
  * ## What this does not do
  *
@@ -92,6 +102,16 @@ export interface EvolutionProposalDraft {
 	readonly expectedBenefits: readonly string[];
 	readonly risks: readonly string[];
 	readonly validationCriteria: readonly ImprovementCriterion[];
+	/**
+	 * Whether this draft creates a new skill.
+	 *
+	 * Defaults to `opportunity.skillId === undefined`, which is the ordinary
+	 * "gap, not defect" reading. The automatic learner states it explicitly and
+	 * supplies `newSkillId`, because a new skill still needs a filename.
+	 */
+	readonly createsNewSkill?: boolean;
+	/** The id to create. Required when `createsNewSkill` is true. */
+	readonly newSkillId?: string;
 }
 
 /** Options for creating the service. */
@@ -172,6 +192,24 @@ function toProposedContent(skill: SkillEntry): ProposedSkillContent {
 /** A version id that is unique within a skill without needing the clock twice. */
 function makeVersionId(now: string, index: number): string {
 	return `v-${now.replace(/[^0-9]/g, '')}-${index}`;
+}
+
+/** Distinguishes two proposals filed in the same millisecond. */
+let proposalSequence = 0;
+
+/**
+ * The id used when the caller does not inject one.
+ *
+ * It has to be a legal **filename**: the store names the proposal file after
+ * this id. The obvious `skill-prop-${now()}` contains the ISO timestamp's
+ * colons, and Windows refuses a colon in a name — the write failed with
+ * `ENOENT`, which read as "the directory is missing" and was not. Only the
+ * timestamp's digits and letters survive, and the sequence keeps two proposals
+ * from the same millisecond apart.
+ */
+function defaultProposalId(now: string): string {
+	proposalSequence += 1;
+	return `skill-prop-${now.replace(/[^0-9A-Za-z]/g, '')}-${proposalSequence}`;
 }
 
 export function createSkillEvolutionService(options: SkillEvolutionServiceOptions): SkillEvolutionService {
@@ -277,7 +315,7 @@ export function createSkillEvolutionService(options: SkillEvolutionServiceOption
 		async createProposal(draft) {
 			try {
 				const current = await readCurrent(skillService, draft.opportunity.skillId);
-				const proposalId = options.generateId?.() ?? `skill-prop-${now()}`;
+				const proposalId = options.generateId?.() ?? defaultProposalId(now());
 
 				const buildInput: CreateEvolutionProposalInput = {
 					opportunity: draft.opportunity,
@@ -290,6 +328,10 @@ export function createSkillEvolutionService(options: SkillEvolutionServiceOption
 					validationCriteria: draft.validationCriteria,
 					now: now(),
 					generateId: () => proposalId,
+					...(draft.createsNewSkill !== undefined
+						? { createsNewSkill: draft.createsNewSkill }
+						: {}),
+					...(draft.newSkillId !== undefined ? { newSkillId: draft.newSkillId } : {}),
 				};
 				const proposal = createEvolutionProposal(buildInput);
 

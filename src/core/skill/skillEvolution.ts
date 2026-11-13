@@ -611,7 +611,13 @@ export interface ProposedSkillContent {
 export interface SkillEvolutionProposal {
 	readonly id: string;
 	readonly status: ProposalStatus;
-	/** The skill being changed, or `undefined` when a new one is proposed. */
+	/**
+	 * The skill being changed — or, when `createsNewSkill`, the id to create.
+	 *
+	 * A new skill has no live file to read, so the id cannot come from the
+	 * current state; it is chosen by the proposal. `writeLive` refuses a
+	 * new-skill proposal without one, because the id is also the filename.
+	 */
 	readonly skillId?: string;
 	/** `true` when the proposal asks for a brand new skill. */
 	readonly createsNewSkill: boolean;
@@ -666,6 +672,22 @@ export interface CreateEvolutionProposalInput {
 	readonly validationCriteria: readonly ImprovementCriterion[];
 	readonly now: string;
 	readonly generateId?: () => string;
+	/**
+	 * Forces the new-skill path.
+	 *
+	 * An opportunity with no `skillId` already means "a gap, not a defect", so
+	 * this defaults to that. It is stated explicitly for the automatic learner,
+	 * where the intent is a new skill even if the opportunity carries an id for
+	 * traceability.
+	 */
+	readonly createsNewSkill?: boolean;
+	/**
+	 * The id of the skill to create.
+	 *
+	 * Only meaningful with `createsNewSkill`. Without it the proposal cannot be
+	 * activated: `writeLive` has no filename to create.
+	 */
+	readonly newSkillId?: string;
 }
 
 /** Bumps a `major.minor.patch` version by one patch. */
@@ -690,13 +712,23 @@ export function nextPatchVersion(version: string): string {
  */
 export function createEvolutionProposal(input: CreateEvolutionProposalInput): SkillEvolutionProposal {
 	const { opportunity } = input;
-	const id = input.generateId?.() ?? `skill-prop-${input.now}-${opportunity.fingerprint.length}`;
+	const id =
+		input.generateId?.() ??
+		// A proposal id names a file. The ISO timestamp contains colons, which
+		// Windows refuses; see `defaultProposalId` in the service.
+		`skill-prop-${input.now.replace(/[^0-9A-Za-z]/g, '')}-${opportunity.fingerprint.length}`;
+	const createsNewSkill = input.createsNewSkill ?? opportunity.skillId === undefined;
+	// A new skill's id is chosen by the proposal, not read from a live file.
+	// Carrying it on `skillId` is what lets `writeLive` create the file, and
+	// the doc on that field says so rather than pretending it is only an
+	// existing-skill reference.
+	const skillId = createsNewSkill ? input.newSkillId : opportunity.skillId;
 
 	return {
 		id,
 		status: 'pending',
-		...(opportunity.skillId !== undefined ? { skillId: opportunity.skillId } : {}),
-		createsNewSkill: opportunity.skillId === undefined,
+		...(skillId !== undefined ? { skillId } : {}),
+		createsNewSkill,
 		problem: opportunity.problem,
 		currentVersion: input.currentVersion,
 		currentInstructions: input.currentInstructions,

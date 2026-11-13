@@ -25,12 +25,13 @@ import type { AssembledCore } from '../app/assemble';
 import type { OpencodeManager } from '../app/opencodeManager';
 import type { OpencodeCatalogService } from '../app/opencodeCatalogService';
 import { RoutingSettings } from './routingSettings';
+import { SkillAuto } from './skillAuto';
 import { buildGallery, categoryLabel } from './integrations';
 
 /** O nome e o endereço de cada área da interface. */
 export const API_CAPABILITIES = {
 	/** Dados reais, prontos nesta fase. */
-	ready: ['overview', 'providers', 'models', 'model-discovery', 'routing-config', 'usage'],
+	ready: ['overview', 'providers', 'models', 'model-discovery', 'routing-config', 'usage', 'skills-auto'],
 	/** Ainda sem endpoint: a página diz que está pendente. */
 	pending: ['combos', 'routing-history', 'policies-write', 'chat'],
 } as const;
@@ -77,10 +78,11 @@ export class WebApi {
 			ready: API_CAPABILITIES.ready,
 			pending: API_CAPABILITIES.pending,
 			/**
-			 * As escrituras que existem: provider e descoberta de modelos.
+			 * As escrituras que existem: provider, descoberta de modelos e o
+			 * interruptor do aprendizado automático.
 			 * Combos, política e chat continuam sem.
 			 */
-			writes: ['providers', 'model-discovery'],
+			writes: ['providers', 'model-discovery', 'skills-auto'],
 		});
 	}
 
@@ -221,6 +223,19 @@ export class WebApi {
 			return notFound('o Core não está montado neste host');
 		}
 		return await new RoutingSettings(this.core).read();
+	}
+
+	/**
+	 * O interruptor do aprendizado automático: o estado em vigor e a auditoria.
+	 *
+	 * Leitura pura — quem escreve é a rota de escrita, e é ela que exige a
+	 * credencial de painel. A forma é a mesma que a janela do desktop valida.
+	 */
+	async autoSkills(): Promise<ApiReply> {
+		if (this.core === undefined) {
+			return notFound('o Core não está montado neste host');
+		}
+		return await new SkillAuto(this.core).read();
 	}
 
 	/** O consumo do período: limites, orçamento e avisos. */

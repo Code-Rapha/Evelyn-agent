@@ -141,7 +141,7 @@ suite('Web: os endpoints de cada área', () => {
 		const reply = new WebApi(undefined).capabilities();
 		assert.strictEqual(reply.status, 200);
 		const writes = (reply.body as { writes: readonly string[] }).writes;
-		assert.deepStrictEqual([...writes], ['providers', 'model-discovery']);
+		assert.deepStrictEqual([...writes], ['providers', 'model-discovery', 'skills-auto']);
 		// Combos e chat continuam sem endpoint, e a página diz isso.
 		const pending = (reply.body as { pending: readonly string[] }).pending;
 		assert.ok(pending.includes('combos'));

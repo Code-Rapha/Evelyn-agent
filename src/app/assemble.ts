@@ -47,6 +47,8 @@ import { createFileMemoryService } from '../core/memory/fileMemoryService';
 import { createFileSkillService } from '../core/skill/fileSkillService';
 import { createSkillEvolutionStore } from '../core/skill/skillEvolutionStore';
 import { createSkillEvolutionService } from '../core/skill/skillEvolutionService';
+import { createAutoSkillStore } from '../core/skill/autoSkillStore';
+import { createAutoSkillService } from '../core/skill/autoSkillService';
 import { createExperimentLog } from '../desktop/experimentLog';
 import { createEvaluationLog } from '../desktop/evaluationLog';
 import { createOrchestrationLog } from '../desktop/orchestrationLog';
@@ -147,6 +149,16 @@ export interface AssembledCore {
 	 * else in the app may call `activateProposal` or `rollbackToVersion`.
 	 */
 	readonly skillEvolution: ReturnType<typeof createSkillEvolutionService>;
+	/**
+	 * The automatic learner: a new skill, from a repeated read-only procedure,
+	 * activated with an `auto` decision when the user has the switch on.
+	 *
+	 * It is the same writer as `skillEvolution` — it calls `createProposal`,
+	 * `approveProposal` and `activateProposal` rather than reaching the file —
+	 * so an automatically learned skill is in the same history as a manual one
+	 * and says who decided.
+	 */
+	readonly autoSkills: ReturnType<typeof createAutoSkillService>;
 	/** The transcript store. The same one the logs read. */
 	readonly history: FileDataStore;
 	/**
@@ -220,6 +232,14 @@ export function assembleCore(options: AssembleOptions = {}): AssembledCore {
 		// back to a person rather than to "something approved it".
 		defaultDecider: 'the user',
 	});
+	// The automatic learner is built over the same two pieces: it files and
+	// activates through `skillEvolution`, and its own file only holds the switch
+	// and the receipts. There is no second path to a live skill.
+	const autoSkills = createAutoSkillService({
+		skillService,
+		evolution: skillEvolution,
+		store: createAutoSkillStore(storage),
+	});
 
 	const history = new FileDataStore({
 		rootPath: root,
@@ -241,6 +261,7 @@ export function assembleCore(options: AssembleOptions = {}): AssembledCore {
 		logger,
 		memoryService,
 		skillService,
+		autoSkills,
 		// Routing is on for the desktop host. The engine owns retries, the
 		// per-attempt timeouts and the fallback decision; the session owns
 		// the breaker so an endpoint's health survives a turn. Paid models
@@ -260,6 +281,7 @@ export function assembleCore(options: AssembleOptions = {}): AssembledCore {
 		memoryService,
 		skillService,
 		skillEvolution,
+		autoSkills,
 		history,
 		learningHistory,
 		chat,

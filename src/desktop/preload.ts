@@ -112,6 +112,7 @@ import {
 	parseSkillEvolutionResultView,
 	parseSkillVersionViews,
 	parseSkillSummaryViews,
+	parseAutoSkillStatusView,
 	parseSaveSkillImprovementInput,
 	parseDecisionReason,
 	type SpendingLimitView,
@@ -827,6 +828,26 @@ const bridge: SeshyinaBridge = Object.freeze({
 		try {
 			return parseSkillSummaryViews(
 				await ipcRenderer.invoke(SKILL_EVOLUTION_CHANNEL, 'skills'),
+			);
+		} catch (error) {
+			rethrow(error);
+		}
+	},
+
+	async autoSkillStatus() {
+		try {
+			return parseAutoSkillStatusView(
+				await ipcRenderer.invoke(SKILL_EVOLUTION_CHANNEL, 'auto-status'),
+			);
+		} catch (error) {
+			rethrow(error);
+		}
+	},
+
+	async setAutoSkillsEnabled(enabled: boolean) {
+		try {
+			return parseAutoSkillStatusView(
+				await ipcRenderer.invoke(SKILL_EVOLUTION_CHANNEL, 'auto-set', enabled),
 			);
 		} catch (error) {
 			rethrow(error);

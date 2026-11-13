@@ -23,7 +23,7 @@ function runtimeEmitting(eventos: readonly Record<string, unknown>[]): Conversat
 				yield evento as never;
 			}
 		},
-		completion: 'completed',
+		completion: 'answered',
 		// O turno lê estes dois campos; o resto não participa deste caminho.
 	} as unknown as ConversationRuntime;
 }
@@ -101,7 +101,7 @@ suite('DEV-10: uma conversa com prompt próprio não vira duas mensagens system'
 				yield { type: 'TextDelta', text: 'ok' } as never;
 				yield { type: 'TurnCompleted' } as never;
 			},
-			completion: 'completed',
+			completion: 'answered',
 		} as unknown as Parameters<typeof runAgentTurn>[0]['runtime'];
 
 		await runAgentTurn(hooks(runtime), record, 'turn-1', () => undefined);
@@ -140,7 +140,7 @@ suite('DEV-10: uma conversa com prompt próprio não vira duas mensagens system'
 				yield { type: 'TextDelta', text: 'ok' } as never;
 				yield { type: 'TurnCompleted' } as never;
 			},
-			completion: 'completed',
+			completion: 'answered',
 		} as unknown as Parameters<typeof runAgentTurn>[0]['runtime'];
 
 		const baseHooks = hooks(runtime);
@@ -173,7 +173,7 @@ suite('DEV-10: uma conversa com prompt próprio não vira duas mensagens system'
 				yield { type: 'TextDelta', text: 'ok' } as never;
 				yield { type: 'TurnCompleted' } as never;
 			},
-			completion: 'completed',
+			completion: 'answered',
 		} as unknown as Parameters<typeof runAgentTurn>[0]['runtime'];
 
 		await runAgentTurn(hooks(runtime), registro(), 'turn-1', () => undefined);
@@ -234,5 +234,64 @@ suite('DEV-10: um turno vazio não é reportado como resposta', () => {
 
 		const terminal = eventos.find((e) => e.type === 'done' || e.type === 'error');
 		assert.notEqual(terminal?.type, 'error', 'um turno com ferramenta não é "vazio"');
+	});
+});
+
+suite('aprendizado automático: o gancho roda no valor que o runtime produz', () => {
+	// O gancho nasceu comparando `completion === 'completed'`, que o runtime
+	// nunca produz. O teste antigo usava o mesmo valor inventado, então o
+	// caminho parecia coberto — e o E2E mostrou o painel funcionando enquanto
+	// nenhuma skill era criada. Este teste usa o valor real.
+	test("um turno 'answered' chama o gancho e emite o selo antes do done", async () => {
+		let chamadas = 0;
+		const runtime = runtimeEmitting([
+			{ type: 'TextDelta', text: 'ok' },
+			{ type: 'TurnCompleted' },
+		]);
+		const eventos: AgentUiEvent[] = [];
+		await runAgentTurn(
+			{
+				...hooks(runtime),
+				learnSkills: async () => {
+					chamadas += 1;
+					return [{ id: 'read-skill', title: 'Read Skill', confidence: 0.6, proposalId: 'p1' }];
+				},
+			},
+			registro(),
+			'turn-1',
+			(evento) => eventos.push(evento),
+		);
+
+		assert.equal(chamadas, 1, 'o gancho tem de rodar no turno bem-sucedido');
+		const selo = eventos.find((e) => e.type === 'skillLearned');
+		assert.ok(selo, 'o selo do turno tem de sair');
+		assert.equal(
+			selo.type === 'skillLearned' ? selo.skills[0]?.id : undefined,
+			'read-skill',
+		);
+		const iSelo = eventos.findIndex((e) => e.type === 'skillLearned');
+		const iDone = eventos.findIndex((e) => e.type === 'done');
+		assert.ok(iSelo >= 0 && iDone > iSelo, 'o selo vem antes do desfecho');
+	});
+
+	test('um turno abortado não ensina: meio procedimento não é prova', async () => {
+		let chamadas = 0;
+		const runtime = {
+			...runtimeEmitting([{ type: 'TextDelta', text: 'ok' }]),
+			completion: 'aborted',
+		} as unknown as ConversationRuntime;
+		await runAgentTurn(
+			{
+				...hooks(runtime),
+				learnSkills: async () => {
+					chamadas += 1;
+					return [];
+				},
+			},
+			registro(),
+			'turn-1',
+			() => undefined,
+		);
+		assert.equal(chamadas, 0);
 	});
 });

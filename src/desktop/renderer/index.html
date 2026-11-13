@@ -1269,6 +1269,24 @@
 							</p>
 						</div>
 
+						<!--
+							O interruptor do aprendizado automático.
+
+							Fica acima das propostas porque é o que decide se
+							uma skill pode nascer sem clique. Desligar não apaga
+							o que já foi aprendido: as skills continuam vivas e
+							saem pelo caminho normal.
+						-->
+						<div class="stack">
+							<span class="summary-title">Aprendizado automático</span>
+							<label class="row">
+								<input type="checkbox" id="auto-skills-enabled" />
+								<span>Evelyn aprende sozinha</span>
+							</label>
+							<p id="auto-skills-detail" class="muted small"></p>
+							<div id="auto-skills-learned" class="stack"></div>
+						</div>
+
 						<p class="muted small">
 							Propostas de melhoria geradas a partir de execuções
 							anteriores. Nenhuma skill é alterada antes de você aprovar

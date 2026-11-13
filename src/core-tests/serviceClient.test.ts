@@ -407,3 +407,89 @@ suite('R4A: cliente do serviço — falhas', () => {
 		}
 	});
 });
+
+/**
+ * O interruptor do aprendizado automático no modo conectado.
+ *
+ * No modo conectado quem aprende é o serviço; a janela só lê e escreve o
+ * booleano. O que se fixa aqui é o caminho de rede: verbo, credencial e a
+ * recusa de um corpo fora do contrato — o que a tela mostraria como
+ * "não foi possível ler" em vez de um interruptor inventado.
+ */
+suite('Cliente do serviço: o interruptor do aprendizado automático', () => {
+	const STATUS = {
+		enabled: true,
+		minConfidence: 0.6,
+		maxAutoSkills: 10,
+		allowedTools: ['skill.read'],
+		learned: [],
+	};
+
+	test('a leitura é GET com a credencial de leitura', async () => {
+		const calls: Call[] = [];
+		const service = client({
+			fetch: fetchBy({ '/api/skills/auto': () => json(STATUS) }, calls),
+		});
+
+		const result = await service.autoSkillStatus();
+
+		assert.equal(result.ok, true);
+		if (result.ok) {
+			assert.equal(result.value.enabled, true);
+			assert.deepEqual([...result.value.allowedTools], ['skill.read']);
+		}
+		assert.equal(calls[0]?.method, 'GET');
+		assert.equal(calls[0]?.headers[READER_HEADER], RECORD.readerToken);
+		// A credencial de painel não viaja numa leitura.
+		assert.equal(calls[0]?.headers['x-seshyina-token'], undefined);
+	});
+
+	test('desligar é POST com a credencial de painel, e a resposta é o que ficou', async () => {
+		const calls: Call[] = [];
+		const service = client({
+			fetch: fetchBy(
+				{ '/api/skills/auto/set': () => json({ ...STATUS, enabled: false }) },
+				calls,
+			),
+		});
+
+		const result = await service.setAutoSkillsEnabled(false);
+
+		assert.equal(result.ok, true);
+		if (result.ok) {
+			assert.equal(result.value.enabled, false, 'a resposta é o estado gravado');
+		}
+		assert.equal(calls[0]?.method, 'POST');
+		assert.equal(calls[0]?.headers['x-seshyina-token'], RECORD.token);
+		assert.equal(calls[0]?.headers[READER_HEADER], undefined);
+	});
+
+	test('um corpo fora do contrato é "invalid-response", não um interruptor inventado', async () => {
+		const service = client({
+			fetch: fetchBy({ '/api/skills/auto': () => json({ enabled: 'sim' }) }),
+		});
+
+		const result = await service.autoSkillStatus();
+
+		assert.equal(result.ok, false);
+		if (!result.ok) {
+			assert.equal(result.code, 'invalid-response');
+		}
+	});
+
+	test('sem serviço ativo, a leitura e a escrita dizem "inactive"', async () => {
+		const service = client({ probe: { kind: 'absent' }, fetch: fetchBy({}) });
+
+		const read = await service.autoSkillStatus();
+		const write = await service.setAutoSkillsEnabled(true);
+
+		assert.equal(read.ok, false);
+		assert.equal(write.ok, false);
+		if (!read.ok) {
+			assert.equal(read.code, 'inactive');
+		}
+		if (!write.ok) {
+			assert.equal(write.code, 'inactive');
+		}
+	});
+});

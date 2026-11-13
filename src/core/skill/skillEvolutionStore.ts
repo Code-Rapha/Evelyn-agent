@@ -78,6 +78,13 @@ function assertSafeName(name: string, what: string): void {
 	if (name === '.' || name === '..') {
 		throw new ValidationError(`${what} cannot be a relative path segment`);
 	}
+	// The name becomes a filename. Windows refuses these characters outright,
+	// and the failure surfaces as `ENOENT` on the temp file — which reads as a
+	// missing directory and sends the next person looking in the wrong place.
+	// Refusing here names the real problem.
+	if (/[<>:"|?*\u0000-\u001f]/.test(name)) {
+		throw new ValidationError(`${what} cannot contain a character Windows refuses in a filename: ${name}`);
+	}
 }
 
 /** Reads JSON, treating a missing or unreadable file as absent. */

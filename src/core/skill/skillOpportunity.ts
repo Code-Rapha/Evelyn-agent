@@ -3,9 +3,10 @@
  * and proposes them as new skills or improvements to existing ones.
  *
  * Design principles:
- * - Runs on demand only (no background processing)
  * - Analyzes a bounded window of recent turns
- * - Returns structured proposals requiring explicit user approval
+ * - Returns structured proposals; it never writes a skill itself
+ * - A caller may file a proposal for review, or — through the automatic
+ *   learner's gates — record an `auto` decision and activate it
  * - Avoids duplicates by checking existing skills
  * - Token-efficient: simple heuristics, no extra model calls
  */
@@ -169,6 +170,13 @@ function extractUserIntents(turns: readonly ConversationTurn[]): Map<string, num
  * a short transcript is not proof, and a number that says otherwise invites the
  * caller to skip the review this whole service exists to require.
  *
+ * The anchors are the contract, not a formula that happens to pass through
+ * them. An earlier version rescaled `1 - 1/n` onto the band and, because the
+ * denominator was the value at n=2, every observation count from two upwards
+ * came out at the ceiling: the field that was meant to rank proposals was a
+ * constant 0.85. Interpolating between the anchors below is what the comment
+ * always claimed, and a test now asserts the two ends and one point between.
+ *
  * - 2 observations (the minimum to be proposed at all) → 0.5
  * - 3 → 0.6
  * - 5 → 0.7
@@ -177,16 +185,29 @@ function extractUserIntents(turns: readonly ConversationTurn[]): Map<string, num
 const CONFIDENCE_FLOOR = 0.5;
 const CONFIDENCE_CEILING = 0.85;
 
+/** `[observations, confidence]`, ascending, with the floor and the ceiling. */
+const CONFIDENCE_ANCHORS: readonly (readonly [number, number])[] = [
+	[2, CONFIDENCE_FLOOR],
+	[3, 0.6],
+	[5, 0.7],
+	[9, CONFIDENCE_CEILING],
+];
+
 function confidenceFrom(observations: number): number {
-	if (!Number.isFinite(observations) || observations <= 0) {
+	if (!Number.isFinite(observations) || observations <= CONFIDENCE_ANCHORS[0]![0]) {
 		return CONFIDENCE_FLOOR;
 	}
-	// `1 - 1/n` puts the value on [0, 1) and rises with each observation;
-	// it is rescaled onto the floor..ceiling band so the first proposal is
-	// not reported as a coin flip and the hundredth is not reported as fact.
-	const raw = 1 - 1 / Math.max(2, observations + 1);
-	const scaled = CONFIDENCE_FLOOR + (CONFIDENCE_CEILING - CONFIDENCE_FLOOR) * (raw / (1 - 1 / 2));
-	return Math.round(Math.min(CONFIDENCE_CEILING, scaled) * 100) / 100;
+	for (let index = 1; index < CONFIDENCE_ANCHORS.length; index++) {
+		const previous = CONFIDENCE_ANCHORS[index - 1]!;
+		const current = CONFIDENCE_ANCHORS[index]!;
+		if (observations <= current[0]) {
+			const span = current[0] - previous[0];
+			const ratio = span === 0 ? 1 : (observations - previous[0]) / span;
+			const value = previous[1] + (current[1] - previous[1]) * ratio;
+			return Math.round(value * 100) / 100;
+		}
+	}
+	return CONFIDENCE_CEILING;
 }
 
 /**
@@ -285,6 +306,7 @@ function proposeFromSequence(
 			'Requer validação humana antes do uso em produção',
 		],
 		confidence: confidenceFrom(observations),
+		observations,
 		improvesSkillId,
 	};
 
@@ -365,6 +387,7 @@ function proposeFromIntent(
 			'Requer revisão e validação antes do uso',
 		],
 		confidence: confidenceFrom(observations),
+		observations,
 		improvesSkillId,
 	};
 

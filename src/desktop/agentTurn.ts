@@ -38,6 +38,14 @@ import type { RecordingTool } from './toolRecorder';
 import type { SkillDiscoveryService } from '../core/skill/types';
 import { createSeshyinaAgentSystemMessage, hasSeshyinaIdentity } from '../core/agent/seshyinaAgent';
 
+/** One skill that became live during a turn. */
+export interface LearnedSkill {
+	readonly id: string;
+	readonly title: string;
+	readonly confidence: number;
+	readonly proposalId: string;
+}
+
 /** What the UI is told about a tool the model asked for. */
 export interface ToolCallSummary {
 	readonly id: string;
@@ -130,6 +138,18 @@ export type AgentUiEvent =
 			readonly skillIds: readonly string[];
 			/** Whether any explicitly requested skills were not found. */
 			readonly missing?: readonly string[];
+	  }
+	| {
+			/**
+			 * Uma skill nova foi aprendida neste turno, sem clique.
+			 *
+			 * Emitido depois de o texto ter sido gravado e antes de `done`, para
+			 * que o selo e o desfecho falem do mesmo turno. Vazio não é emitido:
+			 * um turno que não ensinou nada não precisa dizer isso.
+			 */
+			readonly type: 'skillLearned';
+			readonly turnId: string;
+			readonly skills: readonly LearnedSkill[];
 	  }
 	| {
 			/**
@@ -254,6 +274,15 @@ export interface AgentTurnHooks {
 	};
 	/** The user's message that started this turn, for skill discovery. */
 	readonly userMessage?: string;
+	/**
+	 * Runs the automatic learner once, after the turn completed.
+	 *
+	 * Called only for a turn that actually completed and produced something,
+	 * and before the terminal event. The hook's contract is to report what it
+	 * created and not to throw: learning is a side effect of a turn, never a
+	 * reason for the turn to fail.
+	 */
+	readonly learnSkills?: () => Promise<readonly LearnedSkill[]>;
 }
 
 /**
@@ -601,8 +630,12 @@ export async function runAgentTurn(
 	// out, is not this case: those have their own `completion` value and the
 	// `done` below reports it. Only a turn the runtime considers **completed**
 	// and that produced nothing is the silent one.
-	const completion = hooks.runtime.completion === 'running' ? 'completed' : hooks.runtime.completion;
-	if (completion === 'completed' && totalText.trim().length === 0 && toolCallCount === 0) {
+	// `answered` is the runtime's name for a turn that reached a final answer;
+	// `completed` is not a value it produces. Checking for a value that never
+	// arrives is how the guard below and the learner were both silent until an
+	// end-to-end run showed it: the turn ended, and nothing happened.
+	const completion = hooks.runtime.completion === 'running' ? 'answered' : hooks.runtime.completion;
+	if (completion === 'answered' && totalText.trim().length === 0 && toolCallCount === 0) {
 		sink({
 			type: 'error',
 			turnId,
@@ -611,6 +644,27 @@ export async function runAgentTurn(
 				'Não há resposta para mostrar. Tente de novo ou escolha outro modelo.',
 		});
 		return;
+	}
+
+	// The automatic learner sees a turn that actually completed, and sees it
+	// before `done` so the badge and the terminal event are about the same
+	// turn. It never runs for a stopped or failed turn: half a procedure is
+	// not evidence of a procedure.
+	//
+	// `answered` is the runtime's name for a turn that reached a final answer;
+	// `completed` is not a value it produces. Checking for a value that never
+	// arrives is how this hook silently did nothing until an end-to-end run
+	// showed it: the panel worked, the turn ended, and no skill appeared.
+	if (completion === 'answered' && hooks.learnSkills !== undefined) {
+		try {
+			const learned = await hooks.learnSkills();
+			if (learned.length > 0) {
+				sink({ type: 'skillLearned', turnId, skills: learned });
+			}
+		} catch {
+			// The hook promises not to throw; a host that breaks that promise
+			// still does not get to turn a finished answer into a failure.
+		}
 	}
 
 	sink({

@@ -274,6 +274,14 @@ export interface SkillProposal {
 	readonly constraints?: readonly string[];
 	/** Confidence score 0-1. */
 	readonly confidence: number;
+	/**
+	 * How many times the pattern behind this proposal was seen.
+	 *
+	 * Carried because confidence is derived from it and a caller that has to
+	 * decide whether to act — the automatic learner — needs the count, not only
+	 * a number that has already been rounded onto a curve.
+	 */
+	readonly observations?: number;
 	/** Whether this improves an existing skill (ID if so). */
 	readonly improvesSkillId?: string;
 }
@@ -291,9 +299,10 @@ export interface SkillOpportunityResult {
 /**
  * Service interface for skill opportunity detection.
  *
- * Analyzes recent conversation context to identify reusable procedures
- * that could become skills. Does not auto-save; returns proposals for
- * explicit user approval.
+ * Analyzes recent conversation context to identify reusable procedures.
+ * This service only reads and proposes: it never writes a skill. Saving is the
+ * caller's decision, and the automatic learner records that decision as `auto`
+ * only after the gates in `autoSkill.ts` accept the proposal.
  */
 export interface SkillOpportunityService {
 	/**

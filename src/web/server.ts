@@ -50,6 +50,7 @@ import { WebApi } from './api';
 import { ProviderWrites } from './providerWrites';
 import { DiscoveryWrites } from './modelDiscovery';
 import { RoutingSettings } from './routingSettings';
+import { SkillAuto } from './skillAuto';
 import { CatalogWrites } from './catalogWrites';import { resetReply, resetRouterConfig } from './routerReset';
 import { OpencodeWrites } from './opencodeWrites';
 import type { WebChatEndpoint } from './chatEndpoint';
@@ -84,6 +85,10 @@ export const API_ROUTES: Readonly<Record<string, keyof WebApi>> = {
 	'/api/routing': 'routing',
 	'/api/usage': 'usage',
 	'/api/settings': 'settings',
+	// O interruptor do aprendizado automático. Leitura aqui; a escrita mora
+	// numa rota própria, porque um caminho é de leitura ou de escrita, nunca
+	// os dois.
+	'/api/skills/auto': 'autoSkills',
 };
 
 /**
@@ -128,6 +133,15 @@ export const CATALOG_WRITE_ROUTES: Readonly<Record<string, 'save' | 'remove'>> =
 export const ROUTING_ROUTES: Readonly<Record<string, 'save'>> = {
 	'/api/routing/save': 'save',
 };
+
+/**
+ * O interruptor do aprendizado automático: uma rota, um verbo.
+ *
+ * Só POST — ler o estado é `GET /api/skills/auto`. O caminho é outro porque um
+ * caminho é de leitura ou de escrita, nunca os dois; e esta é a única escrita
+ * que o painel faz neste assunto: as skills já aprendidas não são tocadas.
+ */
+export const SKILL_AUTO_WRITE_ROUTE = '/api/skills/auto/set';
 
 /**
  * A redefinição do roteador.
@@ -662,6 +676,7 @@ export function createWebServer(options: WebServerOptions): {
 			OPENCODE_CHAT_ROUTES[pathname] !== undefined ||
 			pathname === ROUTER_RESET_ROUTE ||
 			pathname === SERVICE_SHUTDOWN_ROUTE ||
+			pathname === SKILL_AUTO_WRITE_ROUTE ||
 			// R4C: as rotas de conversa são POST.
 			pathname === CHAT_TURN_ROUTE ||
 			pathname === CHAT_CANCEL_ROUTE ||
@@ -786,6 +801,22 @@ export function createWebServer(options: WebServerOptions): {
 				return;
 			}
 			const reply = await new RoutingSettings(options.core)[routing](body.value);
+			sendJson(response, reply.status, reply.body, token);
+			return;
+		}
+
+		// O interruptor do aprendizado automático: ligar ou desligar.
+		if (url.pathname === SKILL_AUTO_WRITE_ROUTE) {
+			if (!tokensMatch(presented, token)) {
+				refuse(response, 401, token);
+				return;
+			}
+			const body = await readJsonBody(request);
+			if (body.kind === 'invalid') {
+				sendJson(response, 400, { error: body.reason }, token);
+				return;
+			}
+			const reply = await new SkillAuto(options.core).save(body.value);
 			sendJson(response, reply.status, reply.body, token);
 			return;
 		}

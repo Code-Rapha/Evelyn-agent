@@ -40,6 +40,7 @@
 import { probeService, type ServiceProbe } from '../app/discoverService';
 import type { ServiceRecord } from '../app/serviceRecord';
 import type { ProviderSummary } from './contract';
+import { parseAutoSkillStatusView, type AutoSkillStatusView } from './contract';
 
 /** O header da credencial de leitura. */
 export const READER_HEADER = 'x-seshyina-reader';
@@ -320,6 +321,41 @@ export class ServiceClient {
 		const path = action === 'save' ? '/api/models/catalog/save' : '/api/models/catalog/remove';
 		return await this.write<{ readonly removed?: boolean }>(path, body, (value) =>
 			isRecord(value) ? { ...(value['removed'] === true ? { removed: true } : {}) } : undefined,
+		);
+	}
+
+	/**
+	 * O estado do aprendizado automático **no serviço**.
+	 *
+	 * No modo conectado o Core é o do serviço: é ele que aprende, e é o arquivo
+	 * dele que diz se o caminho está ligado. A janela não monta um Core e não
+	 * lê esse arquivo por conta própria — a leitura atravessa a rota, com a
+	 * credencial de leitura do registro.
+	 */
+	async autoSkillStatus(): Promise<ServiceQuery<AutoSkillStatusView>> {
+		const probe = await (this.options.probe ?? probeService)({ root: this.options.root });
+		if (probe.kind !== 'active') {
+			return { ok: false, code: 'inactive', message: inactiveDetail(probe) };
+		}
+		return await this.query<AutoSkillStatusView>(
+			probe.record,
+			'/api/skills/auto',
+			parseAutoSkillStatus,
+		);
+	}
+
+	/**
+	 * Liga ou desliga o aprendizado automático **no serviço**.
+	 *
+	 * Escrita: credencial de **painel**, como a gravação do roteador. A resposta
+	 * é o estado que ficou gravado, não o que foi pedido — e as skills já
+	 * aprendidas continuam vivas.
+	 */
+	async setAutoSkillsEnabled(enabled: boolean): Promise<ServiceQuery<AutoSkillStatusView>> {
+		return await this.write<AutoSkillStatusView>(
+			'/api/skills/auto/set',
+			{ enabled },
+			parseAutoSkillStatus,
 		);
 	}
 
@@ -824,7 +860,23 @@ function refusalMessage(body: unknown, status: number): string {
 	return `o serviço local recusou a gravação (${status})`;
 }
 
-function parseRouting(body: unknown): ServiceRouting | undefined {	// O corpo real é `{ config, targets, status }`. Só o `config` atravessa:
+/**
+ * O estado do aprendizado automático, validado pelo parser da ponte.
+ *
+ * `parseAutoSkillStatusView` lança quando o corpo não é o contrato; aqui a
+ * falha vira `undefined`, que é o que `query`/`write` traduzem em
+ * `invalid-response` — a mesma resposta para qualquer corpo fora do contrato.
+ */
+function parseAutoSkillStatus(body: unknown): AutoSkillStatusView | undefined {
+	try {
+		return parseAutoSkillStatusView(body);
+	} catch {
+		return undefined;
+	}
+}
+
+function parseRouting(body: unknown): ServiceRouting | undefined {
+	// O corpo real é `{ config, targets, status }`. Só o `config` atravessa:
 	// `targets` traz nomes/URLs que a página do serviço mostra, e nada disso
 	// é necessário para o seletor do chat.
 	const config = isRecord(body) && isRecord(body['config']) ? body['config'] : undefined;

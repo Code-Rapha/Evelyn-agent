@@ -357,6 +357,37 @@ suite('Web Fase 1: o servidor local', () => {
 		assert.strictEqual(noCore.status, 404);
 	});
 
+	test('o interruptor do aprendizado automático exige POST e sessão', async () => {
+		// GET na rota de escrita não muda nada.
+		const viaGet = await call(server.port, { path: '/api/skills/auto/set', headers: auth() });
+		assert.strictEqual(viaGet.status, 405);
+		assert.strictEqual(viaGet.headers['allow'], 'POST');
+
+		// Sem sessão é 401, antes de qualquer leitura do corpo.
+		const anonymous = await call(server.port, {
+			path: '/api/skills/auto/set',
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ enabled: false }),
+		});
+		assert.strictEqual(anonymous.status, 401);
+
+		// Com sessão e sem Core montado, a escrita é recusada — e não grava.
+		const noCore = await call(server.port, {
+			path: '/api/skills/auto/set',
+			method: 'POST',
+			headers: { ...auth(), 'content-type': 'application/json' },
+			body: JSON.stringify({ enabled: false }),
+		});
+		assert.strictEqual(noCore.status, 404);
+		assert.ok(noCore.body.includes('não está montado'));
+
+		// A leitura também: sem Core não há estado, e nenhum é inventado.
+		const read = await call(server.port, { path: '/api/skills/auto', headers: auth() });
+		assert.strictEqual(read.status, 404);
+		assert.ok(read.body.includes('não está montado'));
+	});
+
 	test('a API não tem nenhuma rota além do health', async () => {
 		for (const path of ['/api/providers', '/api/models', '/api/routing', '/api/combos']) {
 			const response = await call(server.port, { path, headers: auth() });

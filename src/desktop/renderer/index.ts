@@ -57,6 +57,7 @@ import {
 	type SkillProposalView,
 	type SkillScanView,
 	type SkillSummaryView,
+	type AutoSkillStatusView,
 } from '../contract';
 import type { DevRunHistoryView } from '../devView';
 import type { DevPanelState } from '../../core/dev/devPanel';
@@ -4677,6 +4678,24 @@ function onChatEvent(event: ChatStreamEvent): void {
 			}
 			return;
 		}
+		case 'skillLearned': {
+			// O selo do aprendizado. Sem ele, uma skill criada sem clique
+			// apareceria na lista sem que a conversa dissesse por quê — e a
+			// única forma de saber seria notar que ela não estava lá antes.
+			const learned = event.skills.map((skill) => `${skill.title} (${skill.id})`);
+			state.messages.push({
+				role: 'skill',
+				content:
+					learned.length === 1
+						? `Skill aprendida: ${learned[0]}`
+						: `Skills aprendidas: ${learned.join(', ')}`,
+			});
+			render();
+			if (state.bridge !== undefined) {
+				void refreshSkillsPanel(state.bridge);
+			}
+			return;
+		}
 		case 'modelSelected': {
 			// Show which model was selected for this turn
 			const label = `${event.providerId}:${event.modelId}`;
@@ -6362,7 +6381,88 @@ async function refreshInstalledSkills(bridge: SeshyinaBridge): Promise<void> {
 
 /** Reloads both halves of the panel: what exists and what is proposed. */
 async function refreshSkillsPanel(bridge: SeshyinaBridge): Promise<void> {
-	await Promise.all([refreshInstalledSkills(bridge), refreshSkillProposals(bridge)]);
+	await Promise.all([
+		refreshInstalledSkills(bridge),
+		refreshAutoSkills(bridge),
+		refreshSkillProposals(bridge),
+	]);
+}
+
+/**
+ * Reads the automatic learner's switch and receipts and renders them.
+ *
+ * The switch is a checkbox rather than a pair of buttons because it is one
+ * state, and the detail line says what the state permits: which tools, which
+ * confidence floor and how many of the cap are used.
+ */
+async function refreshAutoSkills(bridge: SeshyinaBridge): Promise<void> {
+	const checkbox = byId('auto-skills-enabled') as HTMLInputElement;
+	const detail = byId('auto-skills-detail');
+	const learnedList = byId('auto-skills-learned');
+
+	let status: AutoSkillStatusView;
+	try {
+		status = await bridge.autoSkillStatus();
+	} catch {
+		// The proposal queue owns the panel's error line. A failed read leaves
+		// the switch visibly off rather than showing a state nobody verified.
+		checkbox.checked = false;
+		detail.textContent = 'O estado do aprendizado automático não pôde ser lido.';
+		learnedList.replaceChildren();
+		return;
+	}
+
+	checkbox.checked = status.enabled;
+	const count = `${status.learned.length}/${status.maxAutoSkills}`;
+	detail.textContent = status.enabled
+		? `Ligado. Só skills novas, de procedimentos somente-leitura, com confiança ≥ ${status.minConfidence}. ${count} aprendidas.`
+		: `Desligado. Nenhuma skill nova será criada automaticamente. ${count} aprendidas.`;
+
+	learnedList.replaceChildren();
+	for (const entry of status.learned) {
+		const card = document.createElement('div');
+		card.className = 'panel';
+		const heading = document.createElement('p');
+		const title = document.createElement('strong');
+		title.textContent = entry.title;
+		const identity = document.createElement('span');
+		identity.className = 'muted small';
+		identity.textContent = ` ${entry.skillId}`;
+		heading.append(title, identity);
+
+		const evidence = document.createElement('p');
+		evidence.className = 'muted small';
+		evidence.textContent =
+			`Confiança ${entry.confidence} · ${entry.observations} observação(ões) · ` +
+			`conversa ${entry.conversationId} · ${entry.learnedAt}`;
+
+		const tools = document.createElement('p');
+		tools.className = 'muted small';
+		tools.textContent = entry.tools.join(' · ');
+
+		card.append(heading, evidence, tools);
+		learnedList.append(card);
+	}
+}
+
+/**
+ * Writes the switch, then re-reads it.
+ *
+ * The re-read is the confirmation: the checkbox shows what the file says, not
+ * what the click hoped for. A failure puts the box back where it was.
+ */
+async function setAutoSkillsEnabled(bridge: SeshyinaBridge, enabled: boolean): Promise<void> {
+	const checkbox = byId('auto-skills-enabled') as HTMLInputElement;
+	checkbox.disabled = true;
+	try {
+		await bridge.setAutoSkillsEnabled(enabled);
+		await refreshAutoSkills(bridge);
+	} catch (error) {
+		checkbox.checked = !enabled;
+		showSkillsError(error instanceof Error ? error.message : String(error));
+	} finally {
+		checkbox.disabled = false;
+	}
 }
 
 /** Reads the queue and renders it. */
@@ -6416,6 +6516,10 @@ function bindSkillEvolution(bridge: SeshyinaBridge): void {	byId('skills-filter'
 	});
 	byId('skills-scan').addEventListener('click', () => {
 		void runSkillScan(bridge);
+	});
+	byId('auto-skills-enabled').addEventListener('change', () => {
+		const checkbox = byId('auto-skills-enabled') as HTMLInputElement;
+		void setAutoSkillsEnabled(bridge, checkbox.checked);
 	});
 }
 

@@ -129,7 +129,8 @@ import { coordinateCommandRunner } from '../core/dev/devLocks';
 import { createDevToolEntries, type DevToolDeps } from '../core/agent/devTools';
 import type { ToolRegistry } from '../core/agent/toolRegistry';
 import type { MemoryService } from '../core/memory/types';
-import type { SkillService, SkillDiscoveryService } from '../core/skill/types';
+import type { SkillService, SkillDiscoveryService, ConversationTurn } from '../core/skill/types';
+import type { AutoSkillService } from '../core/skill/autoSkillService';
 import { createSkillDiscoveryService } from '../core/skill/skillDiscovery';
 import {
 	createRiskGateway,
@@ -467,6 +468,15 @@ export interface ChatSessionOptions {
 	readonly memoryService?: MemoryService;
 	/** Optional skill service for skill tools. */
 	readonly skillService?: SkillService;
+	/**
+	 * The automatic learner, when the host wired one.
+	 *
+	 * Absent means this host does not learn by itself: the turn runs exactly as
+	 * before and no skill appears without a click. Present, a finished turn asks
+	 * it once, before `done`; the service decides whether anything may be
+	 * created and reports what it created.
+	 */
+	readonly autoSkills?: AutoSkillService;
 	/**
 	 * A sessão do modo DEV (DEV-2), quando o host a oferece.
 	 *
@@ -896,6 +906,8 @@ export class ChatSession {
 	private readonly clock: () => string;
 	private readonly memoryService?: MemoryService;
 	private readonly skillService?: SkillService;
+	/** O aprendizado automático, quando o host o monta. */
+	private readonly autoSkills?: AutoSkillService;
 	/** A sessão do modo DEV, quando o host a oferece (DEV-2). */
 	private dev?: DevToolDeps;
 	private readonly skillDiscovery?: SkillDiscoveryService;
@@ -1106,6 +1118,7 @@ export class ChatSession {
 		this.clock = options.now ?? (() => new Date().toISOString());
 		this.memoryService = options.memoryService;
 		this.skillService = options.skillService;
+		this.autoSkills = options.autoSkills;
 		this.dev = options.dev;
 		this.skillDiscovery = options.skillService !== undefined
 			? createSkillDiscoveryService(options.skillService)
@@ -3534,6 +3547,53 @@ async setConversationPinned(conversationId: string, pinned: boolean): Promise<Co
 						this.appendAssistant(conversation, content, toolCalls),
 					skillDiscovery: this.skillDiscovery,
 					userMessage,
+					// The automatic learner runs once, after the turn's text has
+					// been persisted and before `done`. It reads the transcript
+					// back from the store rather than the `record` captured at the
+					// start, because this turn's assistant rounds are exactly the
+					// evidence it is looking for.
+					learnSkills:
+						this.autoSkills === undefined
+							? undefined
+							: async () => {
+									const autoSkills = this.autoSkills;
+									if (autoSkills === undefined) {
+										return [];
+									}
+									try {
+										const stored = await this.history.getConversation(conversation);
+										if (stored === undefined) {
+											return [];
+										}
+										const registry = await this.tools();
+										const outcome = await autoSkills.learn({
+											conversationId: conversation,
+											turns: skillTurnsFrom(stored.messages),
+											availableToolIds: registry.ids(),
+										});
+										if (outcome.error !== undefined) {
+											this.logger.warn('Automatic skill learning failed', {
+												conversation,
+												error: outcome.error,
+											});
+										} else if (outcome.skipped.length > 0) {
+											this.logger.debug('Automatic skill learning skipped proposals', {
+												conversation,
+												skipped: outcome.skipped,
+											});
+										}
+										return outcome.learned;
+									} catch (error) {
+										// A turn that cannot learn is still a turn that
+										// answered. The failure is logged and the
+										// answer is not withheld because of it.
+										this.logger.warn('Automatic skill learning threw', {
+											conversation,
+											error,
+										});
+										return [];
+									}
+								},
 					...(input.routing !== undefined
 						? {
 								routing: {
@@ -6113,6 +6173,42 @@ function priceRecord(price: MergedPriceView | undefined): {
 			state: chosenSideStale ? 'stale' : 'exact',
 		},
 	};
+}
+
+/**
+ * The stored transcript, projected onto the analyzer's turn shape.
+ *
+ * The analyzer reads tool **calls**, which the store keeps on the assistant
+ * message that made them; `tool` messages are the results and carry no pattern
+ * of their own. System messages are configuration, not conversation.
+ *
+ * Kept here rather than in the Core because it is a projection of the store's
+ * record, and the Core does not know the store's shape.
+ */
+function skillTurnsFrom(messages: readonly ConversationMessage[]): readonly ConversationTurn[] {
+	const turns: ConversationTurn[] = [];
+	for (const message of messages) {
+		if (message.role === 'user') {
+			turns.push({ role: 'user', content: message.content });
+			continue;
+		}
+		if (message.role !== 'assistant') {
+			continue;
+		}
+		turns.push({
+			role: 'assistant',
+			content: message.content,
+			...(message.toolCalls !== undefined && message.toolCalls.length > 0
+				? {
+						toolCalls: message.toolCalls.map((call) => ({
+							name: call.name,
+							arguments: call.arguments,
+						})),
+					}
+				: {}),
+		});
+	}
+	return turns;
 }
 
 function toConversationListItem(record: ConversationRecord): ConversationListItem {
